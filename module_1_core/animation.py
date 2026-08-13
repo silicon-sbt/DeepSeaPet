@@ -13,6 +13,8 @@ class PetState(Enum):
     SLEEP = "sleep"
     HAPPY = "happy"
     LYING = "lying"  # 趴姿 — 聊天窗口左上角
+    HELD = "held"    # 被拎起来（惊慌）
+    FLYING = "flying"  # 甩飞/下落（闭眼尖叫）
 
 
 # 精灵图目录
@@ -156,12 +158,25 @@ def make_placeholder_sprite(state: PetState, size=256):
 
     # ═══ 眼睛 ═══
     eye_y = CY - s * 0.02
-    _draw_chibi_eye(p, CX - s * 0.09, eye_y, s * 0.09, s * 0.11, s, flip=False)
-    _draw_chibi_eye(p, CX + s * 0.09, eye_y, s * 0.09, s * 0.11, s, flip=False)
+    if state == PetState.FLYING:
+        # 闭眼尖叫 > < + 泪滴
+        p.setPen(QPen(QColor(40, 40, 50), max(1.5, s * 0.008)))
+        p.setBrush(Qt.NoBrush)
+        p.drawLine(int(CX - s * 0.14), int(eye_y - s * 0.04), int(CX - s * 0.04), int(eye_y))
+        p.drawLine(int(CX + s * 0.14), int(eye_y - s * 0.04), int(CX + s * 0.04), int(eye_y))
+        p.setBrush(QBrush(QColor(140, 200, 255)))
+        p.drawEllipse(QRectF(CX - s * 0.14, eye_y + s * 0.01, s * 0.03, s * 0.05))
+        p.drawEllipse(QRectF(CX + s * 0.11, eye_y + s * 0.01, s * 0.03, s * 0.05))
+    else:
+        e_scale = 1.18 if state == PetState.HELD else 1.0  # 被拎时睁大
+        _draw_chibi_eye(p, CX - s * 0.09, eye_y, s * 0.09 * e_scale, s * 0.11 * e_scale, s, flip=False)
+        _draw_chibi_eye(p, CX + s * 0.09, eye_y, s * 0.09 * e_scale, s * 0.11 * e_scale, s, flip=False)
 
     # ═══ 眉毛 ═══
     p.setPen(QPen(HAIR_DARK, max(1.5, s * 0.008)))
     brow_y = CY - s * 0.14
+    if state in (PetState.HELD, PetState.FLYING):
+        brow_y -= s * 0.03  # 惊慌上扬
     # 左眉
     path = QPainterPath()
     path.moveTo(CX - s * 0.15, brow_y)
@@ -188,6 +203,14 @@ def make_placeholder_sprite(state: PetState, size=256):
         p.drawEllipse(QRectF(CX - s * 0.04, mouth_y, s * 0.08, s * 0.05))
     elif state == PetState.SLEEP:
         p.drawEllipse(QRectF(CX - s * 0.03, mouth_y + s * 0.01, s * 0.06, s * 0.04))
+    elif state == PetState.HELD:
+        # 惊慌张嘴 O 型
+        p.setBrush(QBrush(QColor(120, 40, 50, 200)))
+        p.drawEllipse(QRectF(CX - s * 0.045, mouth_y - s * 0.01, s * 0.09, s * 0.08))
+    elif state == PetState.FLYING:
+        # 尖叫张大嘴
+        p.setBrush(QBrush(QColor(120, 40, 50, 220)))
+        p.drawEllipse(QRectF(CX - s * 0.055, mouth_y - s * 0.02, s * 0.11, s * 0.10))
     else:
         mpath = QPainterPath()
         mpath.moveTo(CX - s * 0.035, mouth_y)

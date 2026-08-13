@@ -1,7 +1,10 @@
 """桌宠窗口 — 透明无边框置顶、拖拽、贴边隐藏、文件拖放"""
 import sys
+import time
+import math
+from collections import deque
 from PySide6.QtWidgets import QWidget, QLabel, QMenu, QApplication
-from PySide6.QtCore import Qt, Signal, QTimer, QPoint
+from PySide6.QtCore import Qt, Signal, QTimer, QPoint, QPointF
 from PySide6.QtGui import QPixmap, QPainter, QMouseEvent, QDropEvent, QDragEnterEvent, QCursor
 
 from module_1_core.animation import (AnimationController, PetState,
@@ -32,8 +35,25 @@ class PetWindow(QWidget):
         self._snapped_edge = None  # "left" | "right" | "top" | None
         self._bubble = None
 
+        # 拎起来甩 — 物理状态
+        self._mode = "idle"            # idle | grabbed | flying
+        self._px = 0.0                 # 浮点窗口位置
+        self._py = 0.0
+        self._vx = 0.0
+        self._vy = 0.0
+        self._tilt_angle = 0.0         # 倾斜角（度）
+        self._tilt_v = 0.0
+        self._grab_offset = QPointF()  # 鼠标相对窗口的偏移
+        self._mouse = QPointF()        # 鼠标全局坐标
+        self._samples = deque(maxlen=6)  # (t, x, y) 甩速采样
+        self._cur_frame = None         # 当前动画帧（未倾斜）
+        self._tilted = QPixmap(self.PET_SIZE, self.PET_SIZE)  # 倾斜渲染缓冲
+        self._screen_geo = None        # 拎起时缓存的屏幕几何
+        self._last_tick = time.monotonic()
+
         self._init_ui()
         self._init_animation()
+        self._setup_physics()
         self._setup_edge_timer()
 
     def _init_ui(self):
@@ -83,9 +103,27 @@ class PetWindow(QWidget):
         self.anim.play()
 
     def _on_frame(self, pixmap: QPixmap):
-        scaled = pixmap.scaled(self.PET_SIZE, self.PET_SIZE,
-                               Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.sprite_label.setPixmap(scaled)
+        self._cur_frame = pixmap.scaled(self.PET_SIZE, self.PET_SIZE,
+                                        Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._render()
+
+    def _render(self):
+        """把当前帧按倾斜角旋转后显示（绕窗口中心，固定尺寸防抖动）"""
+        if self._cur_frame is None:
+            return
+        if abs(self._tilt_angle) < 0.01:
+            if self.sprite_label.pixmap() is not self._cur_frame:
+                self.sprite_label.setPixmap(self._cur_frame)
+            return
+        self._tilted.fill(Qt.transparent)
+        p = QPainter(self._tilted)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        half = self.PET_SIZE // 2
+        p.translate(half, half)
+        p.rotate(self._tilt_angle)
+        p.drawPixmap(-half, -half, self._cur_frame)
+        p.end()
+        self.sprite_label.setPixmap(self._tilted)
 
     def _setup_edge_timer(self):
         """定时检测贴边/鼠标靠近"""
@@ -93,10 +131,116 @@ class PetWindow(QWidget):
         self._edge_timer.timeout.connect(self._check_edge)
         self._edge_timer.start(200)
 
+    def _setup_physics(self):
+        """物理循环 ~60fps，与 8fps 动画 timer 解耦"""
+        self._phys_timer = QTimer(self)
+        self._phys_timer.setInterval(16)
+        self._phys_timer.timeout.connect(self._physics_tick)
+
+    # ── 拎起来甩物理 ─────────────────────
+
+    def _start_grab(self):
+        """真正拎起来（拖拽超过点击阈值）"""
+        if self._hidden_at_edge:
+            self.expand_from_edge()
+        self._mode = "grabbed"
+        self._px = float(self.x())
+        self._py = float(self.y())
+        self._vx = self._vy = 0.0
+        self._tilt_angle = 0.0
+        self._tilt_v = 0.0
+        screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+        self._screen_geo = screen.availableGeometry()
+        self.set_state("held")
+        self._last_tick = time.monotonic()
+        self._phys_timer.start()
+
+    def _physics_tick(self):
+        now = time.monotonic()
+        dt = min(0.05, now - self._last_tick)
+        self._last_tick = now
+        if dt <= 0:
+            return
+
+        if self._mode == "grabbed":
+            self._step_grabbed(dt)
+        elif self._mode == "flying":
+            self._step_flying(dt)
+        else:
+            self._phys_timer.stop()
+            return
+
+        self._step_tilt(dt)
+        self.move(round(self._px), round(self._py))
+        self._render()
+
+    def _step_grabbed(self, dt):
+        """弹簧-阻尼跟随鼠标（临界阻尼→平滑惯性，无震荡）"""
+        K, C = 70.0, 17.0
+        tx = self._mouse.x() - self._grab_offset.x()
+        ty = self._mouse.y() - self._grab_offset.y()
+        self._vx += ((tx - self._px) * K - self._vx * C) * dt
+        self._vy += ((ty - self._py) * K - self._vy * C) * dt
+        self._px += self._vx * dt
+        self._py += self._vy * dt
+
+    def _step_flying(self, dt):
+        """松手惯性 + 重力下落 + 落地弹跳 + 墙反弹"""
+        G = 2000.0
+        self._vy += G * dt
+        self._px += self._vx * dt
+        self._py += self._vy * dt
+
+        sg = self._screen_geo
+
+        floor = sg.bottom()
+        if self._py + self.PET_SIZE >= floor:
+            self._py = floor - self.PET_SIZE
+            if self._vy > 100.0:
+                self._vy = -self._vy * 0.55
+                self._vx *= 0.9
+            else:
+                self._vy = 0.0
+                self._vx -= self._vx * 9.0 * dt
+                if abs(self._vx) < 20.0:
+                    self._vx = 0.0
+                    self._settle()
+
+        if self._px <= sg.left():
+            self._px = sg.left()
+            self._vx = abs(self._vx) * 0.7
+        elif self._px + self.PET_SIZE >= sg.right():
+            self._px = sg.right() - self.PET_SIZE
+            self._vx = -abs(self._vx) * 0.7
+        if self._py <= sg.top():
+            self._py = sg.top()
+            self._vy = 0.0
+
+    def _step_tilt(self, dt):
+        """倾斜角由水平速度驱动，自身走阻尼弹簧避免逐帧抖"""
+        target = max(-12.0, min(12.0, -self._vx * 0.006))
+        self._tilt_v += ((target - self._tilt_angle) * 60.0 - self._tilt_v * 15.0) * dt
+        self._tilt_angle += self._tilt_v * dt
+
+    def _settle(self):
+        """站稳，回 idle"""
+        self._mode = "idle"
+        self._vx = self._vy = 0.0
+        self._tilt_angle = 0.0
+        self._tilt_v = 0.0
+        self._phys_timer.stop()
+        self.move(round(self._px), round(self._py))
+        self.set_state("idle")
+        self._render()
+        self.config.pet_x = round(self._px)
+        self.config.pet_y = round(self._py)
+
     # ── 动画状态 ──────────────────────────
 
     def set_state(self, state_name: str):
-        """切换动画状态: "idle"|"walk"|"hide"|"peek"|"sleep"|"happy" """
+        """切换动画状态: "idle"|"walk"|"hide"|"peek"|"sleep"|"happy"|"lying"|"held"|"flying" """
+        if self._mode != "idle" and state_name not in ("held", "flying"):
+            return  # 物理态（拎起/甩飞）拥有表情，落地回 idle 后再响应
         try:
             state = PetState(state_name)
             self.anim.switch(state)
@@ -119,6 +263,8 @@ class PetWindow(QWidget):
 
     def _check_edge(self):
         """检测是否应贴边隐藏/展开"""
+        if self._mode != "idle":
+            return
         screen = QApplication.screenAt(self.geometry().center())
         if not screen:
             return
@@ -208,25 +354,48 @@ class PetWindow(QWidget):
         if event.button() == Qt.LeftButton:
             self._drag_start = event.globalPosition().toPoint()
             self._is_dragging = False
+            self._mouse = event.globalPosition()
+            self._grab_offset = self._mouse - QPointF(self.pos())
+            self._samples.clear()
+            self._samples.append((time.monotonic(),
+                                  self._mouse.x(), self._mouse.y()))
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        if event.buttons() & Qt.LeftButton and self._drag_start:
-            delta = event.globalPosition().toPoint() - self._drag_start
-            if delta.manhattanLength() > self.CLICK_THRESHOLD:
-                self._is_dragging = True
-            if self._is_dragging:
-                self.move(self.pos() + delta)
-                self._drag_start = event.globalPosition().toPoint()
-                # 拖拽时先展开
-                if self._hidden_at_edge:
-                    self.expand_from_edge()
+        if event.buttons() & Qt.LeftButton and self._drag_start is not None:
+            gp = event.globalPosition()
+            self._mouse = gp
+            self._samples.append((time.monotonic(), gp.x(), gp.y()))
+            if not self._is_dragging:
+                delta = gp.toPoint() - self._drag_start
+                if delta.manhattanLength() > self.CLICK_THRESHOLD:
+                    self._is_dragging = True
+                    self._start_grab()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        if event.button() == Qt.LeftButton and not self._is_dragging:
-            self.clicked.emit()
-        # 保存位置
-        self.config.pet_x = self.x()
-        self.config.pet_y = self.y()
+        if event.button() == Qt.LeftButton:
+            if self._is_dragging:
+                # 拎起来过 → 算甩速抛出
+                flick_vx = flick_vy = 0.0
+                if len(self._samples) >= 2:
+                    (t1, x1, y1), (t2, x2, y2) = self._samples[-2], self._samples[-1]
+                    dtt = max(1e-4, t2 - t1)
+                    flick_vx = (x2 - x1) / dtt
+                    flick_vy = (y2 - y1) / dtt
+                self._vx += flick_vx * 0.5
+                self._vy += flick_vy * 0.5
+                mag = math.hypot(self._vx, self._vy)
+                if mag > 2500.0:
+                    self._vx = self._vx / mag * 2500.0
+                    self._vy = self._vy / mag * 2500.0
+                self._mode = "flying"
+                self.set_state("flying")
+            else:
+                # 纯点击 → 打开聊天
+                self.clicked.emit()
+                self.config.pet_x = self.x()
+                self.config.pet_y = self.y()
+            self._drag_start = None
+            self._is_dragging = False
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         """双击喂食 — 开心动画"""
