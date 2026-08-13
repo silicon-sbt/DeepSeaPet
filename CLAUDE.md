@@ -43,7 +43,7 @@ pyinstaller --onefile --windowed --name DeepSeaPet main.py
 
 ### 拎起甩物理
 
-`PetWindow` 拖拽改为物理驱动（非直接平移）。鼠标按住超 5px 触发 `_start_grab`（held 惊慌表情）→ 弹簧-阻尼跟随（`_step_grabbed`，K=70/C=17 临界阻尼，滞后惯性无震荡）→ 松手按甩速 + 重力落地弹跳（`_step_flying`，G=2000/REST=0.55，进入 flying 态切 `set_state("flying")` 闭眼尖叫）→ `_render` 用 QPainter 绕中心旋转倾斜（`_step_tilt` 限 ±12°）。物理 `_phys_timer` 16ms 与 8fps 动画 timer 解耦；`_check_edge` 在 `_mode != "idle"` 时停用。**参数待真实精灵图到位后调手感**（占位图看不出效果）。
+`PetWindow` 拖拽改为物理驱动（非直接平移）。鼠标按住超 5px 触发 `_start_grab`（held 惊慌表情，抓取锚点设在领口 `QPointF(PET_SIZE*0.52, PET_SIZE*0.64)`）→ 弹簧-阻尼跟随（`_step_grabbed`，K=200/C=28 临界阻尼，滞后惯性无震荡）→ 松手按甩速 + 重力落地弹跳（`_step_flying`，G=2000/REST=0.55，进入 flying 态切 `set_state("flying")` 闭眼尖叫）→ `_render` 用 QPainter 绕中心旋转倾斜（`_step_tilt` 限 ±30°）。**转身**由鼠标位移驱动：grabbed 态用指数平滑位移 `_drag_dx = _drag_dx*0.6 + Δx`（阈值 ±6px，解决稳态 `_vx≈0` 慢拖不翻转），flying 态用甩速 `_vx` 方向（阈值 ±5）。物理 `_phys_timer` 16ms 与 8fps 动画 timer 解耦；`_check_edge` 在 `_mode != "idle"` 时停用。
 
 ### 垃圾桶
 
@@ -71,7 +71,7 @@ pyinstaller --onefile --windowed --name DeepSeaPet main.py
 2. **姿势层**：SDXL img2img 以基准图为构图/姿势起点（`strength=0.55`）
 3. happy 单图已验证（llava 确认身份锁定），批量脚本就绪：9 状态 × 8 帧
 
-**模型**：Animagine XL 4.0（6.9G，`from_single_file`）+ IP-Adapter Plus SDXL（808M），均已在 `/root/autodl-tmp/`。状态：**单图验证通过**，批量 9 状态待切 GPU 跑。
+**模型**：Animagine XL 4.0（6.9G，`from_single_file`）+ IP-Adapter Plus SDXL（808M），均已在 `/root/autodl-tmp/`。状态：**✅ 已完成**——9 状态 × 8 帧全部生成 + rembg 抠图 + 入库 `module_5_assets/sprites/`（72 帧，llava 目测身份锁定达标）。
 
 ### 模型下载
 
@@ -98,7 +98,7 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 
 ### 生成工作流（SDXL + IP-Adapter）
 
-> 模型已下载、happy 单图已验证通过。剩余步骤：
+> **✅ 已完成**（2026-08）：9 状态 × 8 帧全部生成并入库。流程留档备用：
 
 1. 切 GPU 模式开机，`run_remote.py "nvidia-smi"` 验证 CUDA
 2. 上传黑皮鞋基准图 → 覆盖 `/root/autodl-tmp/sprites_output/idle/idle_00.png`
@@ -146,3 +146,12 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 - **学术加速**：`source /etc/network_turbo` 后直连 HF ~8MB/s（hf-mirror 仅 1.1MB/s）；但 HF `resolve/main` 302 会丢 Range 头，续传前先 `curl -sIL -o /dev/null -w '%{url_effective}'` 解析 CDN URL。
 - **下载脚本必须 `set -e`**：否则 curl/wget 中途失败仍跑完并误写 `.done`，轮询误判完成（本次踩坑）。
 - **关机命令**：用 `shutdown -h now`（SysV），别用 `poweroff`——AutoDL 容器非 systemd，`poweroff` 是 systemd 符号链接，报 `System has not been booted with systemd` 且不关机。生成跑完自动关机时务必用 `shutdown -h now`。
+
+### GitHub 推送（GFW 踩坑）
+
+仓库：`github.com/silicon-sbt/DeepSeaPet.git`（**PUBLIC**）。本地上传经 GFW 时大流量 SSH 会被重置（`Connection reset by peer` / `send-pack: unexpected disconnect while reading sideband packet`），认证正常但传输中断。实测经验：
+
+- **22 端口 SSH**：316KB 代码勉强能过，≥2MB 必被重置。
+- **443 端口 SSH**（`git -c core.sshCommand="ssh -p 443 -o HostName=ssh.github.com" push`）：阈值更高，但 ~2.4MB 以上仍是概率性失败。
+- **稳定方案**：443 端口 + **小批量拆分**——每批 ≤1.2MB（约 4 帧 PNG）连续成功；失败就 `git reset --soft HEAD~1 && git reset HEAD` 拆更小再推。21MB 素材最终拆成 ~20 个 commit 推完。
+- **敏感文件**（`api火山`、`autodl_tools/ssh`、`config.json`、`conversations.json`、硬编码密码的 `_test_ssh.py/_deploy.py/_check_env.py`）已在 `.gitignore`，提交前用 `git ls-files | grep -iE ...` 复查。
