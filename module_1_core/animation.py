@@ -43,7 +43,7 @@ class AnimationController(QObject):
         """从磁盘加载 {state}_*.png 帧序列"""
         import glob
         pattern = str(SPRITE_DIR / f"{state.value}_*.png")
-        files = sorted(glob.glob(pattern))
+        files = sorted(glob.glob(pattern))[:1]  # 只取帧 0 作静态底图，动作交给程序化变换
         if not files:
             return False
         self._frames[state] = [QPixmap(f) for f in files]

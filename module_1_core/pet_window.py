@@ -36,13 +36,21 @@ class PetWindow(QWidget):
         self._bubble = None
 
         # 拎起来甩 — 物理状态
-        self._mode = "idle"            # idle | grabbed | flying
+        self._mode = "idle"            # idle | grabbed | flying | slide
         self._px = 0.0                 # 浮点窗口位置
         self._py = 0.0
         self._vx = 0.0
         self._vy = 0.0
+        self._target_x = 0.0           # 滑动目标窗口坐标（hide/peek 平滑过渡）
+        self._target_y = 0.0
         self._tilt_angle = 0.0         # 倾斜角（度）
         self._tilt_v = 0.0
+        self._scale_x = 1.0            # 呼吸/跳跃 squash
+        self._scale_y = 1.0
+        self._bob_x = 0.0              # 跳跃位移
+        self._bob_y = 0.0
+        self._facing = 1               # 1=朝右，-1=镜像朝左（往左甩时转身）
+        self._anim_t = 0.0             # 动画相位（秒），set_state 时重置
         self._grab_offset = QPointF()  # 鼠标相对窗口的偏移
         self._mouse = QPointF()        # 鼠标全局坐标
         self._samples = deque(maxlen=6)  # (t, x, y) 甩速采样
@@ -50,6 +58,8 @@ class PetWindow(QWidget):
         self._tilted = QPixmap(self.PET_SIZE, self.PET_SIZE)  # 倾斜渲染缓冲
         self._screen_geo = None        # 拎起时缓存的屏幕几何
         self._last_tick = time.monotonic()
+        self._last_mouse_x = 0.0       # 上一帧鼠标 x（转身用）
+        self._drag_dx = 0.0            # 鼠标位移累积（指数平滑，慢拖也稳定翻转）
 
         self._init_ui()
         self._init_animation()
@@ -108,19 +118,18 @@ class PetWindow(QWidget):
         self._render()
 
     def _render(self):
-        """把当前帧按倾斜角旋转后显示（绕窗口中心，固定尺寸防抖动）"""
+        """把当前帧按 倾斜+缩放+位移 变换后显示（绕窗口中心，固定尺寸防抖动）"""
         if self._cur_frame is None:
-            return
-        if abs(self._tilt_angle) < 0.01:
-            if self.sprite_label.pixmap() is not self._cur_frame:
-                self.sprite_label.setPixmap(self._cur_frame)
             return
         self._tilted.fill(Qt.transparent)
         p = QPainter(self._tilted)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         half = self.PET_SIZE // 2
         p.translate(half, half)
-        p.rotate(self._tilt_angle)
+        p.scale(self._facing, 1.0)                 # 镜像：往左甩转身朝左
+        p.rotate(self._tilt_angle * self._facing)  # 镜像坐标内反角度，视觉倾斜不随镜像翻转
+        p.scale(self._scale_x, self._scale_y)
+        p.translate(self._bob_x, self._bob_y)
         p.drawPixmap(-half, -half, self._cur_frame)
         p.end()
         self.sprite_label.setPixmap(self._tilted)
@@ -132,28 +141,36 @@ class PetWindow(QWidget):
         self._edge_timer.start(200)
 
     def _setup_physics(self):
-        """物理循环 ~60fps，与 8fps 动画 timer 解耦"""
+        """物理循环 ~60fps 常驻，与 8fps 动画 timer 解耦。idle 呼吸/滑动/甩飞共用"""
         self._phys_timer = QTimer(self)
         self._phys_timer.setInterval(16)
         self._phys_timer.timeout.connect(self._physics_tick)
+        self._phys_timer.start()
 
     # ── 拎起来甩物理 ─────────────────────
 
     def _start_grab(self):
         """真正拎起来（拖拽超过点击阈值）"""
         if self._hidden_at_edge:
-            self.expand_from_edge()
+            self.expand_from_edge()      # 算好展开目标 + 清隐藏标记（内部会起 slide）
+            self._px = self._target_x    # 拎起要立即弹出到位，跳过平滑滑动
+            self._py = self._target_y
+            self.move(round(self._px), round(self._py))
         self._mode = "grabbed"
         self._px = float(self.x())
         self._py = float(self.y())
         self._vx = self._vy = 0.0
         self._tilt_angle = 0.0
         self._tilt_v = 0.0
+        self._scale_x = self._scale_y = 1.0  # 拎起时复位呼吸 squash
+        self._bob_x = self._bob_y = 0.0
+        self._facing = 1
+        self._last_mouse_x = self._mouse.x()
+        self._drag_dx = 0.0
         screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
         self._screen_geo = screen.availableGeometry()
         self.set_state("held")
         self._last_tick = time.monotonic()
-        self._phys_timer.start()
 
     def _physics_tick(self):
         now = time.monotonic()
@@ -162,21 +179,56 @@ class PetWindow(QWidget):
         if dt <= 0:
             return
 
+        self._anim_t += dt
+
         if self._mode == "grabbed":
             self._step_grabbed(dt)
+            self._step_tilt(dt)
+            self.move(round(self._px), round(self._py))
         elif self._mode == "flying":
             self._step_flying(dt)
-        else:
-            self._phys_timer.stop()
-            return
+            self._step_tilt(dt)
+            self.move(round(self._px), round(self._py))
+        elif self._mode == "slide":
+            self._step_slide(dt)
+            self.move(round(self._px), round(self._py))
+        else:  # idle / 贴边停靠
+            self._step_idle(dt)
 
-        self._step_tilt(dt)
-        self.move(round(self._px), round(self._py))
         self._render()
 
-    def _step_grabbed(self, dt):
-        """弹簧-阻尼跟随鼠标（临界阻尼→平滑惯性，无震荡）"""
+    def _step_idle(self, dt):
+        """呼吸（idle/peek 停靠）+ 双击跳跃弧线，仅视觉变换不动窗口"""
+        if self.anim.current_state == PetState.HAPPY:
+            pr = min(1.0, self._anim_t / 2.0)
+            self._bob_y = -40 * math.sin(math.pi * pr)  # 跳起→落下
+            self._scale_x = self._scale_y = 1.0
+        else:
+            s = math.sin(self._anim_t * 1.5) * 0.02
+            self._scale_y = 1.0 + s
+            self._scale_x = 1.0 - s
+            self._bob_y = 0.0
+        self._bob_x = 0.0
+
+    def _step_slide(self, dt):
+        """弹簧-阻尼逼近目标位置（hide/peek 平滑过渡），到位回 idle"""
         K, C = 70.0, 17.0
+        self._vx += ((self._target_x - self._px) * K - self._vx * C) * dt
+        self._vy += ((self._target_y - self._py) * K - self._vy * C) * dt
+        self._px += self._vx * dt
+        self._py += self._vy * dt
+        if (abs(self._target_x - self._px) < 0.5 and abs(self._target_y - self._py) < 0.5
+                and abs(self._vx) < 5.0 and abs(self._vy) < 5.0):
+            self._px = self._target_x
+            self._py = self._target_y
+            self._vx = self._vy = 0.0
+            self._mode = "idle"
+            self.config.pet_x = round(self._px)
+            self.config.pet_y = round(self._py)
+
+    def _step_grabbed(self, dt):
+        """弹簧-阻尼跟随鼠标（K 大 → 跟手紧，C≈2√K 临界阻尼无震荡）"""
+        K, C = 200.0, 28.0
         tx = self._mouse.x() - self._grab_offset.x()
         ty = self._mouse.y() - self._grab_offset.y()
         self._vx += ((tx - self._px) * K - self._vx * C) * dt
@@ -218,7 +270,20 @@ class PetWindow(QWidget):
 
     def _step_tilt(self, dt):
         """倾斜角由水平速度驱动，自身走阻尼弹簧避免逐帧抖"""
-        target = max(-12.0, min(12.0, -self._vx * 0.006))
+        if self._mode == "grabbed":
+            # 转身跟随鼠标运动方向：位移指数平滑，慢速拖也稳定翻转（vx 稳态≈0 会卡在旧方向）
+            self._drag_dx = self._drag_dx * 0.6 + (self._mouse.x() - self._last_mouse_x)
+            self._last_mouse_x = self._mouse.x()
+            if self._drag_dx > 6.0:
+                self._facing = 1
+            elif self._drag_dx < -6.0:
+                self._facing = -1
+        else:  # flying：转身跟随甩速方向
+            if self._vx > 5.0:
+                self._facing = 1
+            elif self._vx < -5.0:
+                self._facing = -1
+        target = max(-30.0, min(30.0, self._vx * 0.016))
         self._tilt_v += ((target - self._tilt_angle) * 60.0 - self._tilt_v * 15.0) * dt
         self._tilt_angle += self._tilt_v * dt
 
@@ -228,7 +293,9 @@ class PetWindow(QWidget):
         self._vx = self._vy = 0.0
         self._tilt_angle = 0.0
         self._tilt_v = 0.0
-        self._phys_timer.stop()
+        self._scale_x = self._scale_y = 1.0
+        self._bob_x = self._bob_y = 0.0
+        self._facing = 1
         self.move(round(self._px), round(self._py))
         self.set_state("idle")
         self._render()
@@ -241,6 +308,7 @@ class PetWindow(QWidget):
         """切换动画状态: "idle"|"walk"|"hide"|"peek"|"sleep"|"happy"|"lying"|"held"|"flying" """
         if self._mode != "idle" and state_name not in ("held", "flying"):
             return  # 物理态（拎起/甩飞）拥有表情，落地回 idle 后再响应
+        self._anim_t = 0.0  # 换状态重置动画相位（呼吸/跳跃重新起弧）
         try:
             state = PetState(state_name)
             self.anim.switch(state)
@@ -323,10 +391,10 @@ class PetWindow(QWidget):
         elif edge == "top":
             y = sg.top() - self.PET_SIZE + self.PEEK_PX
 
-        self.move(x, y)
+        self.set_state("peek")           # 先切动画态（此时 _mode 仍 idle，门控放行）
         self._hidden_at_edge = True
         self._snapped_edge = edge
-        self.set_state("peek")
+        self._start_slide(x, y)
 
     def expand_from_edge(self):
         """从边缘展开"""
@@ -343,10 +411,19 @@ class PetWindow(QWidget):
         elif self._snapped_edge == "top":
             y = sg.top()
 
-        self.move(x, y)
+        self.set_state("idle")           # 先切回 idle（此时 _mode 仍 idle，门控放行）
         self._hidden_at_edge = False
         self._snapped_edge = None
-        self.set_state("idle")
+        self._start_slide(x, y)
+
+    def _start_slide(self, x, y):
+        """弹簧逼近目标窗口位置（hide/peek 平滑过渡）"""
+        self._target_x = float(x)
+        self._target_y = float(y)
+        self._px = float(self.x())
+        self._py = float(self.y())
+        self._vx = self._vy = 0.0
+        self._mode = "slide"
 
     # ── 鼠标交互 ──────────────────────────
 
@@ -355,7 +432,8 @@ class PetWindow(QWidget):
             self._drag_start = event.globalPosition().toPoint()
             self._is_dragging = False
             self._mouse = event.globalPosition()
-            self._grab_offset = self._mouse - QPointF(self.pos())
+            # 拎住衣领：锚点对准领口（左右白色领子正中，原图 ~267,327 → 窗口比例 0.52,0.64）
+            self._grab_offset = QPointF(self.PET_SIZE * 0.52, self.PET_SIZE * 0.64)
             self._samples.clear()
             self._samples.append((time.monotonic(),
                                   self._mouse.x(), self._mouse.y()))

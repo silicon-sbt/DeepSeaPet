@@ -29,7 +29,7 @@ pyinstaller --onefile --windowed --name DeepSeaPet main.py
 
 ### 动画流
 
-`AnimationController` 管理状态机（idle/walk/hide/peek/sleep/happy/**lying**/**held**/**flying**），优先从 `module_5_assets/sprites/{state}_*.png` 加载帧序列，无素材时用 `make_placeholder_frames()` 代码绘制 Q版鲸鱼娘。`PetWindow` 通过 Qt 信号 `frame_changed` 接收帧更新，QTimer 驱动 8fps 循环。`lying` 状态为横向趴姿，用于聊天窗口。
+`AnimationController` 管理状态机（idle/walk/hide/peek/sleep/happy/**lying**/**held**/**flying**），每状态只从 `module_5_assets/sprites/{state}_*.png` 加载**帧 0 作静态底图**（`load_from_dir` 只取 `[:1]`），无素材时用 `make_placeholder_frames()` 代码绘制 Q版鲸鱼娘。动作交给**程序化变换**而非逐帧序列：`PetWindow._render` 用 QPainter 叠加 **镜像(`_facing`)**+倾斜(`_tilt_angle`)+缩放(`_scale_x/_scale_y`)+位移(`_bob_x/_bob_y`)，60fps 物理 timer 常驻驱动。变换顺序 `translate(half) → scale(_facing,1) → rotate(_tilt_angle*_facing) → scale(sx,sy) → translate(bob) → draw(-half,-half)`；镜像用 `rotate(angle*_facing)` 反角补偿，使视觉倾倒方向不随镜像翻转。idle 呼吸 `sin(t*1.5)*0.02`、happy 双击跳跃 `-40*sin(π*t/2)`、held/flying 走弹簧+重力物理、hide/peek 走弹簧逼近 `_start_slide`。`_anim_t` 为统一动画相位，`set_state` 切状态时重置。`lying` 状态为横向趴姿，用于聊天窗口。
 
 ### 聊天流
 
@@ -69,9 +69,9 @@ pyinstaller --onefile --windowed --name DeepSeaPet main.py
 
 1. **身份层**：IP-Adapter Plus SDXL 用基准图锁住 Q 版角色身份（`ip_adapter_image` + `set_ip_adapter_scale(0.8)`）
 2. **姿势层**：SDXL img2img 以基准图为构图/姿势起点（`strength=0.55`）
-3. 先跑 `generate_sdxl.py happy` 单图，本地 llava 验证身份锁住后，再批量 7 状态
+3. happy 单图已验证（llava 确认身份锁定），批量脚本就绪：9 状态 × 8 帧
 
-**模型**：Animagine XL 4.0（6.9G，`from_single_file`）+ IP-Adapter Plus SDXL（808M），均已在 `/root/autodl-tmp/`。状态：**未验证**（等切 GPU 跑测试图）。
+**模型**：Animagine XL 4.0（6.9G，`from_single_file`）+ IP-Adapter Plus SDXL（808M），均已在 `/root/autodl-tmp/`。状态：**单图验证通过**，批量 9 状态待切 GPU 跑。
 
 ### 模型下载
 
@@ -98,12 +98,12 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 
 ### 生成工作流（SDXL + IP-Adapter）
 
-1. 无卡模式开机，下载模型（Animagine XL 4.0 + IP-Adapter 三文件）
-2. 本地 `_prep_base.py` 抠图基准图合白底 → 上传到 `/root/autodl-tmp/sprites_output/{state}/{state}_00.png`
-3. 切 GPU 模式开机，`run_remote.py "nvidia-smi"` 验证 CUDA
-4. `upload_and_run.py autodl_tools/generate_sdxl.py happy` 跑单图测试
-5. 下载测试图 → 本地 llava 验证 IP-Adapter 是否锁住身份 → 确认后批量 7 状态
-6. 下载 `/root/autodl-tmp/sprites_video/` → rembg 抠图 → 覆盖 `module_5_assets/sprites/`
+> 模型已下载、happy 单图已验证通过。剩余步骤：
+
+1. 切 GPU 模式开机，`run_remote.py "nvidia-smi"` 验证 CUDA
+2. 上传黑皮鞋基准图 → 覆盖 `/root/autodl-tmp/sprites_output/idle/idle_00.png`
+3. `upload_and_run.py autodl_tools/generate_sdxl.py` 批量 9 状态（held/flying/lying 走 txt2img 单独生成基准）
+4. 下载 `/root/autodl-tmp/sprites_output/{state}/` → rembg 抠图 → 覆盖 `module_5_assets/sprites/`
 
 ### 辅助脚本 (`autodl_tools/`)
 
@@ -112,7 +112,7 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 | `conn.py` | **连接统一入口**：解析 `ssh` 文件返回 (host,port,user,pw)，克隆实例后只改一处 |
 | `launch_remote.py` | 通用：上传本地文件 + nohup 后台启动，日志 `/root/autodl-tmp/{basename}.log` |
 | `_poll_remote.py` | 通用：复用 SSH 连接轮询远端日志，出现完成词/失败标记即退出 |
-| `generate_sdxl.py` | **当前方案**：SDXL img2img + IP-Adapter 身份锁定（未验证） |
+| `generate_sdxl.py` | **当前方案**：SDXL img2img + IP-Adapter 身份锁定，批量 9 状态 × 8 帧（单图已验证） |
 | `generate_video.py` | LightX2V 蒸馏 Wan2.1 I2V 视频→帧精灵图（**已弃用**，帧一致性 ~71 不达标） |
 | `_build_pipeline.py` | 组装 distill_fp8 + 官方小件 → `wan_pipeline/`（transformer 硬链接省盘；UMT5/VAE 统一 `convert_pth`） |
 | `_fast_download.py` | 多线程 Range 分块下载 + `.done` 完整性标记（分块全成功才算完成，`os.pwrite` 免锁） |
@@ -145,3 +145,4 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 - **`load_ip_adapter` 子目录**：`image_encoder_folder` 默认 `'image_encoder'`，与 `subfolder` 组合成 `sdxl_models/image_encoder/`。本地按此布局放，别传绝对路径。
 - **学术加速**：`source /etc/network_turbo` 后直连 HF ~8MB/s（hf-mirror 仅 1.1MB/s）；但 HF `resolve/main` 302 会丢 Range 头，续传前先 `curl -sIL -o /dev/null -w '%{url_effective}'` 解析 CDN URL。
 - **下载脚本必须 `set -e`**：否则 curl/wget 中途失败仍跑完并误写 `.done`，轮询误判完成（本次踩坑）。
+- **关机命令**：用 `shutdown -h now`（SysV），别用 `poweroff`——AutoDL 容器非 systemd，`poweroff` 是 systemd 符号链接，报 `System has not been booted with systemd` 且不关机。生成跑完自动关机时务必用 `shutdown -h now`。

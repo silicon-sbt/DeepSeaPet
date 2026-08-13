@@ -36,3 +36,36 @@ sprites_video/
 
 # Claude Code
 .claude/
+
+# 本地模型 (巨大，勿提交)
+models/
+ollama_models/
+
+# 第三方参考源码 clone
+autodl_tools/_ref_lightx2v/
+
+# 硬编码了 AutoDL 实例密码的临时诊断脚本（勿提交）
+autodl_tools/_test_ssh.py
+autodl_tools/_deploy.py
+autodl_tools/_check_env.py
+
+# 参考图 / 截图 / 测试图
+QQ*.png
+Q版*.png
+二次元*.png
+鲸鱼娘_参考图*.png
+autodl_tools/_contact_sheet.jpg
+autodl_tools/happy_test.png
+autodl_tools/idle_base.png
+
+# 临时目录 / 备份 / 压缩包
+_compare2/
+_frames_local/
+autodl_tools/_compare/
+autodl_tools/_lightx2v_src.tgz
+autodl_tools/_platform.tgz
+module_5_assets/sprites.tar.gz
+module_5_assets/sprites_backup/
+module_5_assets/reference/
+autodl_tools/sprites_video_dl/
+autodl_tools/sprites_new/

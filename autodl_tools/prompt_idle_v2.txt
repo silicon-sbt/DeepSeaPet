@@ -1,0 +1,19 @@
+spritesheet, 8 frames in 2 rows 4 columns grid,
+solid pure #00ff00 bright green background, no shadows, no gradients, no floor, no reflections,
+exactly the same chibi anime girl across all frames, identical character design, no variations in appearance,
+blue long gradient hair with bangs between eyes, blue whale tail hairpin, maid headdress,
+dark blue maid dress with white apron, gold bow at collar, large sparkling blue eyes, blush,
+chibi proportions, big head small body, clear thick outlines, flat cel-shading,
+complete full body inside each frame, enough spacing between frames so they do not overlap,
+no crop on hair, head, hands, feet, tail, or body,
+do NOT use #00ff00 anywhere in the character or props,
+standing idle breathing animation cycle, only minor variations between frames, very subtle motion:
+frame1: standing relaxed, hands clasped in front, neutral gentle smile, tail curved behind
+frame2: slight inhale, chest slightly raised, tail tip raised, subtle motion
+frame3: full inhale, hair floating slightly, tail swaying upward, very slight
+frame4: beginning exhale, body slightly lowering, tail relaxing, eyes half-closed
+frame5: mid exhale, settled relaxed posture, tail drooped relaxed, calm
+frame6: weight shift slightly left, tail sway right, playful slight smirk, subtle
+frame7: weight shift slightly right, tail sway left, gentle smile returning, subtle
+frame8: final frame shows centered balanced pose, tail slowly returning center, relaxed gentle warm smile, loop ready
+game animation spritesheet, consistent art style, pixel art reference
