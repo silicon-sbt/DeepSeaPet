@@ -13,12 +13,38 @@ DST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites_new")
 SIZE = 512
 
 def chroma_key(a):
-    """绿幕/白底色度键 → RGBA。绿：g 明显高于 r/b；白：三通道全亮。"""
+    """绿幕/白底色度键 → RGBA（flood-fill 连通域版）。
+
+    只把「与图像边缘 4-连通的」绿色/白色当背景抠掉；角色内部的白色
+    （围裙/袜边/高光）不与边缘连通，全部保留。
+    （教训: 旧版用全局阈值 (r>225)&(g>225)&(b>225)，把角色白色部分抠成透明洞。）
+    """
+    from collections import deque
     r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
     green = (g > r + 40) & (g > b + 40)
-    white = (r > 225) & (g > 225) & (b > 225)
-    bg = green | white
-    alpha = bg.astype(np.uint8) * 255
+    white = (r > 242) & (g > 242) & (b > 242)
+    bgmask = green | white
+    h, w = a.shape[:2]
+    bg = np.zeros((h, w), bool)
+    q = deque()
+    for x in range(w):
+        if bgmask[0, x]:
+            bg[0, x] = True; q.append((0, x))
+        if bgmask[h - 1, x]:
+            bg[h - 1, x] = True; q.append((h - 1, x))
+    for y in range(h):
+        if bgmask[y, 0]:
+            bg[y, 0] = True; q.append((y, 0))
+        if bgmask[y, w - 1]:
+            bg[y, w - 1] = True; q.append((y, w - 1))
+    while q:
+        y, x = q.popleft()
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < h and 0 <= nx < w and not bg[ny, nx] and bgmask[ny, nx]:
+                bg[ny, nx] = True
+                q.append((ny, nx))
+    alpha = np.where(bg, 0, 255).astype(np.uint8)
     rgba = np.dstack([a.astype(np.uint8), alpha])
     return rgba
 

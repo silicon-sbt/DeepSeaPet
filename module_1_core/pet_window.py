@@ -2,6 +2,7 @@
 import sys
 import time
 import math
+import random
 from collections import deque
 from PySide6.QtWidgets import QWidget, QLabel, QMenu, QApplication
 from PySide6.QtCore import Qt, Signal, QTimer, QPoint, QPointF
@@ -20,7 +21,7 @@ class PetWindow(QWidget):
     # 宠物本体大小
     PET_SIZE = 256
     # 贴边时露出像素
-    PEEK_PX = 30
+    PEEK_PX = 60
     # 边缘吸附阈值
     EDGE_THRESHOLD = 50
     # 单击判定 — 移动小于此像素算点击
@@ -36,7 +37,7 @@ class PetWindow(QWidget):
         self._bubble = None
 
         # 拎起来甩 — 物理状态
-        self._mode = "idle"            # idle | grabbed | flying | slide
+        self._mode = "idle"            # idle | grabbed | flying | slide | walk
         self._px = 0.0                 # 浮点窗口位置
         self._py = 0.0
         self._vx = 0.0
@@ -60,6 +61,11 @@ class PetWindow(QWidget):
         self._last_tick = time.monotonic()
         self._last_mouse_x = 0.0       # 上一帧鼠标 x（转身用）
         self._drag_dx = 0.0            # 鼠标位移累积（指数平滑，慢拖也稳定翻转）
+
+        # 闲置散步 — walk 状态触发
+        self._walk_ready_at = time.monotonic() + random.uniform(25, 60)  # 闲置多久后开始散步
+        self._walk_target_x = 0.0      # 散步目标窗口 x
+        self._walk_speed = 0.0         # 散步速度 px/s
 
         self._init_ui()
         self._init_animation()
@@ -189,6 +195,9 @@ class PetWindow(QWidget):
             self._step_flying(dt)
             self._step_tilt(dt)
             self.move(round(self._px), round(self._py))
+        elif self._mode == "walk":
+            self._step_walk(dt)
+            self.move(round(self._px), round(self._py))
         elif self._mode == "slide":
             self._step_slide(dt)
             self.move(round(self._px), round(self._py))
@@ -197,13 +206,30 @@ class PetWindow(QWidget):
 
         self._render()
 
+    def _facing_toward_center(self) -> int:
+        """按窗口位置决定朝向: 屏幕右半朝左(-1), 左半朝右(1), 始终面向屏幕中心"""
+        screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+        if not screen:
+            return self._facing
+        sg = screen.availableGeometry()
+        center_x = (sg.left() + sg.right()) / 2
+        return -1 if self.x() + self.PET_SIZE / 2 > center_x else 1
+
     def _step_idle(self, dt):
-        """呼吸（idle/peek 停靠）+ 双击跳跃弧线，仅视觉变换不动窗口"""
+        """呼吸（idle/peek 停靠）+ 双击跳跃弧线 + 跳舞纯帧循环，仅视觉变换不动窗口"""
         if self.anim.current_state == PetState.HAPPY:
             pr = min(1.0, self._anim_t / 2.0)
             self._bob_y = -40 * math.sin(math.pi * pr)  # 跳起→落下
             self._scale_x = self._scale_y = 1.0
+        elif self.anim.current_state == PetState.DANCE:
+            # 跳舞：8 帧帧动画已足够，不叠程序化 bob/tilt
+            self._scale_x = self._scale_y = 1.0
+            self._bob_y = 0.0
         else:
+            # 待机朝向：按位置面向屏幕中心（拖动桌宠后自动转身，不随机）
+            want = self._facing_toward_center()
+            if want != self._facing:
+                self._facing = want
             s = math.sin(self._anim_t * 1.5) * 0.02
             self._scale_y = 1.0 + s
             self._scale_x = 1.0 - s
@@ -225,6 +251,75 @@ class PetWindow(QWidget):
             self._mode = "idle"
             self.config.pet_x = round(self._px)
             self.config.pet_y = round(self._py)
+            self._schedule_walk()
+
+    # ── 闲置散步（walk 状态：8 帧步态循环 + 水平移动）───
+
+    def _schedule_walk(self):
+        """安排下一次散步（闲置 25-60 秒后）"""
+        self._walk_ready_at = time.monotonic() + random.uniform(25, 60)
+
+    def _maybe_start_walk(self) -> bool:
+        """闲置够久且条件满足 → 开始散步。返回 True 表示已触发（调用方应跳过贴边检测）"""
+        if self._mode != "idle" or self._hidden_at_edge:
+            return False
+        if self.anim.current_state != PetState.IDLE:
+            self._schedule_walk()  # happy/peek 等未结束，重新计时
+            return False
+        if time.monotonic() < self._walk_ready_at:
+            return False
+
+        screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+        sg = screen.availableGeometry()
+        lo = sg.left() + 40
+        hi = sg.right() - self.PET_SIZE - 40
+        if hi - lo < 80:  # 屏幕可用宽度太小，放弃散步
+            self._schedule_walk()
+            return False
+
+        cx = float(self.x())
+        dist = random.uniform(120, 300)
+        self._facing = self._facing_toward_center()  # 按位置面向屏幕中心，不随机
+        tx = cx + self._facing * dist
+        tx = max(lo, min(hi, tx))
+        if abs(tx - cx) < 40:  # 目标太近（贴边处），换个时间再走
+            self._schedule_walk()
+            return False
+
+        self._walk_target_x = tx
+        self._walk_speed = random.uniform(55.0, 75.0)
+        self._px = cx
+        self._py = float(self.y())
+        self._vx = self._vy = 0.0
+        self._scale_x = self._scale_y = 1.0
+        self._bob_x = self._bob_y = 0.0
+        self._tilt_angle = 0.0
+        self._tilt_v = 0.0
+        self.set_state("walk")   # 此时 _mode 仍是 idle，门控放行
+        self._mode = "walk"
+        return True
+
+    def _step_walk(self, dt):
+        """原地步态帧循环（动画 timer 驱动）+ 水平匀速移动，到位回 idle"""
+        d = self._walk_speed * dt
+        if self._facing > 0:
+            self._px = min(self._walk_target_x, self._px + d)
+        else:
+            self._px = max(self._walk_target_x, self._px - d)
+        self._py = float(self.y())
+        if abs(self._px - self._walk_target_x) < 1.0:
+            self._px = self._walk_target_x
+            self._finish_walk()
+
+    def _finish_walk(self):
+        """散步结束，站稳回 idle"""
+        self._mode = "idle"
+        self._vx = self._vy = 0.0
+        self.set_state("idle")
+        self._schedule_walk()
+        self.config.pet_x = round(self._px)
+        self.config.pet_y = round(self._py)
+        self._render()
 
     def _step_grabbed(self, dt):
         """弹簧-阻尼跟随鼠标（K 大 → 跟手紧，C≈2√K 临界阻尼无震荡）"""
@@ -301,11 +396,12 @@ class PetWindow(QWidget):
         self._render()
         self.config.pet_x = round(self._px)
         self.config.pet_y = round(self._py)
+        self._schedule_walk()
 
     # ── 动画状态 ──────────────────────────
 
     def set_state(self, state_name: str):
-        """切换动画状态: "idle"|"walk"|"hide"|"peek"|"sleep"|"happy"|"lying"|"held"|"flying" """
+        """切换动画状态: "idle"|"walk"|"dance"|"hide"|"peek"|"sleep"|"happy"|"lying"|"held"|"flying" """
         if self._mode != "idle" and state_name not in ("held", "flying"):
             return  # 物理态（拎起/甩飞）拥有表情，落地回 idle 后再响应
         self._anim_t = 0.0  # 换状态重置动画相位（呼吸/跳跃重新起弧）
@@ -333,6 +429,8 @@ class PetWindow(QWidget):
         """检测是否应贴边隐藏/展开"""
         if self._mode != "idle":
             return
+        if self._maybe_start_walk():
+            return  # 已开始散步，本 tick 不再做贴边检测
         screen = QApplication.screenAt(self.geometry().center())
         if not screen:
             return
@@ -391,7 +489,8 @@ class PetWindow(QWidget):
         elif edge == "top":
             y = sg.top() - self.PET_SIZE + self.PEEK_PX
 
-        self.set_state("peek")           # 先切动画态（此时 _mode 仍 idle，门控放行）
+        # 贴边时显示完整角色（idle）而非 peek 躲藏图——peek 素材显示效果像"只有尾巴"，已弃用
+        self.set_state("idle")           # 先切动画态（此时 _mode 仍 idle，门控放行）
         self._hidden_at_edge = True
         self._snapped_edge = edge
         self._start_slide(x, y)
@@ -469,6 +568,8 @@ class PetWindow(QWidget):
                 self.set_state("flying")
             else:
                 # 纯点击 → 打开聊天
+                if self._mode == "walk":
+                    self._finish_walk()  # 散步中点击：先站稳
                 self.clicked.emit()
                 self.config.pet_x = self.x()
                 self.config.pet_y = self.y()
@@ -476,11 +577,11 @@ class PetWindow(QWidget):
             self._is_dragging = False
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
-        """双击喂食 — 开心动画"""
+        """双击 — 跳舞动画（即梦生成 8 帧循环，跳 10 秒自动回 idle）"""
         if event.button() == Qt.LeftButton:
-            self.set_state("happy")
-            self.show_bubble("啊呜~ 好吃!", 2000)
-            QTimer.singleShot(2000, lambda: self.set_state("idle"))
+            self.set_state("dance")
+            self.show_bubble("♪ 来跳支舞吧 ♪", 2000)
+            QTimer.singleShot(10000, lambda: self.set_state("idle"))
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)

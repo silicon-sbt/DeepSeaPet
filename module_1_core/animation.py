@@ -12,6 +12,7 @@ class PetState(Enum):
     PEEK = "peek"
     SLEEP = "sleep"
     HAPPY = "happy"
+    DANCE = "dance"  # 双击触发 — 8 帧跳舞循环（即梦生成）
     LYING = "lying"  # 趴姿 — 聊天窗口左上角
     HELD = "held"    # 被拎起来（惊慌）
     FLYING = "flying"  # 甩飞/下落（闭眼尖叫）
@@ -40,12 +41,18 @@ class AnimationController(QObject):
         self._frames[state] = frames
 
     def load_from_dir(self, state: PetState):
-        """从磁盘加载 {state}_*.png 帧序列"""
+        """从磁盘加载 {state}_*.png 帧序列。
+
+        walk/dance 加载全部帧（真实步态/舞蹈循环），其余状态只取帧 0 作静态底图，
+        动作交给程序化变换（bob/tilt/scale）。
+        """
         import glob
         pattern = str(SPRITE_DIR / f"{state.value}_*.png")
-        files = sorted(glob.glob(pattern))[:1]  # 只取帧 0 作静态底图，动作交给程序化变换
+        files = sorted(glob.glob(pattern))
         if not files:
             return False
+        if state not in (PetState.WALK, PetState.DANCE):
+            files = files[:1]
         self._frames[state] = [QPixmap(f) for f in files]
         return True
 

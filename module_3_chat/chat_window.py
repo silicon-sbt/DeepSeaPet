@@ -207,6 +207,20 @@ class ChatWindow(QWidget):
 
         root.addWidget(self.input_bar)
 
+        # ── 右上角关闭按钮（无边框窗口无系统关闭钮）──
+        self._close_btn = QPushButton("✕", self)
+        self._close_btn.setFixedSize(24, 24)
+        self._close_btn.move(WIN_W - 30, 6)
+        self._close_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 180); color: #8A94A6;
+                border: none; border-radius: 12px; font-size: 12px;
+            }
+            QPushButton:hover { background: #E86A6A; color: white; }
+        """)
+        self._close_btn.setCursor(Qt.PointingHandCursor)
+        self._close_btn.clicked.connect(self.hide)
+
     # ── 左上角趴姿角色（叠在输入条左上方）──
 
     def _init_pet(self):

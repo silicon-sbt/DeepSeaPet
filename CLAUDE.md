@@ -35,7 +35,7 @@ pyinstaller --onefile --windowed --name DeepSeaPet main.py
 
 `ChatWindow._send()` → 后台线程调 `ApiClient.chat_stream()` → 逐 token 通过 `Signal` 跨线程回主线程 → `_on_stream_tick` 更新 HTML 气泡。`ApiClient` 包装 OpenAI SDK，自动兼容 DeepSeek 和自定义 OpenAI 兼容 API。
 
-**聊天窗口 UI**：500×380 全透明无边框悬浮窗。上部透明消息区（气泡浮动在桌面），底部 `InputBar`（`paintEvent` 自绘圆角蓝边白底输入条，22px 圆角，3px `#4A9EFF` 边框）。左上角鲸鱼娘趴姿叠在输入条左上方，独立透明 QWidget。窗口 80% 透明度，拖拽移动，Ctrl+Enter 发送。
+**聊天窗口 UI**：500×380 全透明无边框悬浮窗。上部透明消息区（气泡浮动在桌面），底部 `InputBar`（`paintEvent` 自绘圆角蓝边白底输入条，22px 圆角，3px `#4A9EFF` 边框）。右上角自绘 ✕ 关闭按钮（24px 白底圆钮，hover 变红），无边框窗口的唯一关闭入口。左上角鲸鱼娘趴姿叠在输入条左上方，独立透明 QWidget。窗口 80% 透明度，拖拽移动，Ctrl+Enter 发送。
 
 ### 贴边隐藏
 
@@ -105,6 +105,16 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 3. `upload_and_run.py autodl_tools/generate_sdxl.py` 批量 9 状态（held/flying/lying 走 txt2img 单独生成基准）
 4. 下载 `/root/autodl-tmp/sprites_output/{state}/` → rembg 抠图 → 覆盖 `module_5_assets/sprites/`
 
+### 当前活跃：即梦 I2V 行走视频（`imeng_walk.py`）
+
+> 完整管线/状态/坐标备忘在 **`HANDOFF_walk_video.md`**（交接 deepseek harness 的文档），本节只记要点。
+
+- **目标**：AutoDL 即梦 (Seedance 2.0) I2V API，以干净锚点 `_walk_gen/anchor_clean.png` 生成 **2D 横版行走循环**，抽 8 关键帧替换 `module_5_assets/sprites/walk_00..07.png`（替代已弃用的 LightX2V 视频方案）。
+- **用法**：`python autodl_tools/imeng_walk.py --anchor "E:\code\deepseek的桌宠\_walk_gen\anchor_clean.png"` → 下载 `_walk_gen/walk_raw.mp4`；`--dry-run` 只看请求体不花钱。
+- **计费**：一次 5s 720p ≈ 108900 tokens ≈ **¥5**；`video_url` 24h 有效，拿到立刻下载。
+- **⚠️ API key 红线**：即梦 key 只在用户全局 `C:\Users\A\.claude\CLAUDE.md`，经环境变量 `IMENG_KEY` 注入（**`imeng_walk.py` 无硬编码默认值，设了才跑**）。**绝不能写进本仓库任何文件**（DeepSeaPet 是 PUBLIC 仓库）。
+- **桌宠加载真相**：`animation.py:46` `load_from_dir` 只取 `[:1]`——**walk_01..07 不会显示**，walk 动画是程序化 bob/tilt 叠在单帧上；要真步态须先改它（方案见交接文档 §7）。
+
 ### 辅助脚本 (`autodl_tools/`)
 
 | 文件 | 用途 |
@@ -113,12 +123,15 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 | `launch_remote.py` | 通用：上传本地文件 + nohup 后台启动，日志 `/root/autodl-tmp/{basename}.log` |
 | `_poll_remote.py` | 通用：复用 SSH 连接轮询远端日志，出现完成词/失败标记即退出 |
 | `generate_sdxl.py` | **当前方案**：SDXL img2img + IP-Adapter 身份锁定，批量 9 状态 × 8 帧（单图已验证） |
+| `imeng_walk.py` | **当前活跃**：即梦 Seedance 2.0 I2V 生成行走循环视频（¥5/次 → `_walk_gen/walk_raw.mp4`） |
 | `generate_video.py` | LightX2V 蒸馏 Wan2.1 I2V 视频→帧精灵图（**已弃用**，帧一致性 ~71 不达标） |
 | `_build_pipeline.py` | 组装 distill_fp8 + 官方小件 → `wan_pipeline/`（transformer 硬链接省盘；UMT5/VAE 统一 `convert_pth`） |
 | `_fast_download.py` | 多线程 Range 分块下载 + `.done` 完整性标记（分块全成功才算完成，`os.pwrite` 免锁） |
 | `_upload_build.py` | 上传组装脚本+基准图，nohup 后台启动组装 |
 | `_prep_base.py` | rembg 抠图基准图 → 白底 RGB 720×720 基准图 |
 | `_check_wan.py` | HTTP API 探测 ModelScope 仓库结构 |
+| `_vlm_look.py` | 本地 Ollama llava:7b 视觉自审（无视觉环境下"看"图） |
+| `_ascii_view.py` | ASCII 渲染基准图/生成帧（无视觉环境备选） |
 | `generate_sprites.py` | 纯 SDXL img2img 精灵图（**已弃用**，无 IP-Adapter，一致性不达标） |
 | `animation_design.md` | 7 状态 × 8 帧的详细动画设计文档（中文） |
 | `upload_and_run.py` | SFTP 上传 + 前台执行（实时打印输出） |
@@ -154,4 +167,4 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 - **22 端口 SSH**：316KB 代码勉强能过，≥2MB 必被重置。
 - **443 端口 SSH**（`git -c core.sshCommand="ssh -p 443 -o HostName=ssh.github.com" push`）：阈值更高，但 ~2.4MB 以上仍是概率性失败。
 - **稳定方案**：443 端口 + **小批量拆分**——每批 ≤1.2MB（约 4 帧 PNG）连续成功；失败就 `git reset --soft HEAD~1 && git reset HEAD` 拆更小再推。21MB 素材最终拆成 ~20 个 commit 推完。
-- **敏感文件**（`api火山`、`autodl_tools/ssh`、`config.json`、`conversations.json`、硬编码密码的 `_test_ssh.py/_deploy.py/_check_env.py`）已在 `.gitignore`，提交前用 `git ls-files | grep -iE ...` 复查。
+- **敏感文件**（`api火山`、`autodl_tools/ssh`、`config.json`、`conversations.json`、硬编码密码的 `_test_ssh.py/_deploy.py/_check_env.py`）已在 `.gitignore`，提交前用 `git ls-files | grep -iE ...` 复查。`imeng_walk.py` **不在** gitignore，但已改纯 env-only（无 key 默认值）——提交前必须再 grep 确认无 `IMENG_KEY` 硬编码。

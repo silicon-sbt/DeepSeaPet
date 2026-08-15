@@ -26,6 +26,9 @@ venv/
 config.json
 conversations.json
 api火山
+# 交接文档, 内含即梦 API key, 勿提交
+HANDOFF_walk_video.md
+
 
 # AutoDL
 autodl_tools/ssh
@@ -66,6 +69,16 @@ autodl_tools/_lightx2v_src.tgz
 autodl_tools/_platform.tgz
 module_5_assets/sprites.tar.gz
 module_5_assets/sprites_backup/
+
+# 3D webpet 实验 / DSH 工具锁
+_rollback_3d/
+skills-lock.json
+
+# 即梦生成素材 (大文件, 不入库)
+_walk_gen/
+autodl_tools/_walk_dl_v1/
+autodl_tools/_walk_dl_v2/
+*.stackdump
 module_5_assets/reference/
 autodl_tools/sprites_video_dl/
 autodl_tools/sprites_new/

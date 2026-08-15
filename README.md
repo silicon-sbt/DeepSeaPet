@@ -4,13 +4,15 @@
 
 ## 特性
 
-- 🎭 **9 状态动画桌宠** — 待机/行走/隐藏/探头/睡觉/开心/趴姿/拎起/飞落，动作由**程序化物理**驱动（60fps 弹簧-阻尼 + 重力 + 镜像/倾斜/缩放变换），非逐帧动画
+- 🎭 **10 状态动画桌宠** — 待机/行走/跳舞/隐藏/探头/睡觉/开心/趴姿/拎起/飞落，动作由**程序化物理**驱动（60fps 弹簧-阻尼 + 重力 + 镜像/倾斜/缩放变换）
+- 💃 **双击跳舞** — 双击桌宠播放即梦生成的 8 帧舞蹈循环，跳满 10 秒自动回待机
+- 🚶 **自动散步** — 闲置 25-60 秒自动开始散步，**朝向始终面向屏幕中心**（在右侧朝左、左侧朝右，拖动后自动转身）
 - 🖐️ **拎起甩物理** — 按住拖拽弹簧跟随（惊慌表情），松手按甩速抛飞、落地弹跳（闭眼尖叫），拖动方向决定转身
-- 📎 **贴边隐藏** — 靠近屏幕边缘自动吸附只露 30px，鼠标靠近平滑探出
+- 📎 **贴边隐藏** — 靠近屏幕边缘自动吸附露出 60px，鼠标靠近平滑探出
 - 💬 **流式聊天** — 支持 DeepSeek 及任意 OpenAI 兼容 API，对话持久化，透明无边框悬浮气泡窗口
 - 🗑️ **垃圾桶** — 拖放文件到桌宠 → 确认后移入回收站（可记住偏好不再提示）
-- 🚀 **开机自启** — Windows 注册表 Run 键，打包后指向 exe 自身
-- 🎨 **精灵图素材** — SDXL + IP-Adapter 生成的真实 Q 版底图（9 状态 × 8 帧），无素材时自动回退到代码绘制占位图
+- 🚀 **开机自启** — Windows 注册表 Run 键，开机自动启动，打包后指向 exe 自身
+- 🎨 **精灵图素材** — 即梦 Seedance 2.0 I2V 生成待机/走路/跳舞（真实 2D 横版循环），SDXL + IP-Adapter 生成其余状态；**10 状态 × 8 帧统一尺寸**（490px 高、脚底对齐、居中）
 
 ## 运行
 
@@ -34,15 +36,17 @@ pyinstaller --onefile --windowed --name DeepSeaPet main.py
 |---|---|
 | UI | PySide6（透明无边框置顶窗口，QPainter 程序化变换渲染） |
 | AI 对话 | OpenAI SDK（兼容 DeepSeek / 自定义 API，流式输出） |
-| 精灵图 | SDXL img2img + IP-Adapter 身份锁定（AutoDL GPU，`autodl_tools/`） |
+| 精灵图 | 即梦 Seedance 2.0 I2V（`autodl_tools/imeng_walk.py`）+ SDXL img2img + IP-Adapter（AutoDL GPU） |
 | 配置 | JSON（%APPDATA%/DeepSeaPet/） |
 | 打包 | PyInstaller → 单文件 exe |
 
 ## 动画机制
 
-`AnimationController` 管理状态机（idle/walk/hide/peek/sleep/happy/lying/held/flying），每状态只从 `module_5_assets/sprites/{state}_*.png` 加载帧 0 作静态底图。动作交给程序化变换而非逐帧序列：`PetWindow._render` 用 QPainter 叠加**镜像 + 倾斜 + 缩放 + 位移**，60fps 物理 timer 常驻驱动。
+`AnimationController` 管理状态机（idle/walk/dance/hide/peek/sleep/happy/lying/held/flying），walk/dance 加载全部 8 帧做真实循环动画，其余状态取帧 0 作静态底图。动作交给程序化变换：`PetWindow._render` 用 QPainter 叠加**镜像 + 倾斜 + 缩放 + 位移**，60fps 物理 timer 常驻驱动。
 
-- **idle** 呼吸：`sin(t*1.5)*0.02` Y 向缩放
+- **idle** 呼吸：`sin(t*1.5)*0.02` Y 向缩放，朝向按窗口位置自动面向屏幕中心
+- **dance** 双击：8 帧即梦舞蹈循环，10 秒自动回待机
+- **walk** 散步：8 帧步态循环 + 水平移动，朝向屏幕中心
 - **happy** 双击跳跃：`-40*sin(π*t/2)` 抛物线
 - **held/flying** 拎起甩物理：弹簧-阻尼跟随（K=200/C=28），松手后重力落地弹跳（G=2000/REST=0.55），甩速方向决定转身
 - **hide/peek** 贴边：弹簧平滑逼近目标位置
@@ -56,8 +60,8 @@ deepseek桌宠/
 ├── module_2_api/           # API 客户端 + 配置管理
 ├── module_3_chat/          # 聊天窗口 + 对话存储 + 打招呼
 ├── module_4_system/        # 垃圾桶 + 开机自启
-├── module_5_assets/        # 精灵图素材（9 状态 × 8 帧 PNG）
-└── autodl_tools/           # AutoDL 远程精灵图生成辅助脚本
+├── module_5_assets/        # 精灵图素材（10 状态 × 8 帧 PNG，统一尺寸）
+└── autodl_tools/           # 即梦 I2V + AutoDL 远程精灵图生成辅助脚本
 ```
 
 ## 贡献者
