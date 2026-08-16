@@ -61,6 +61,9 @@ class PetWindow(QWidget):
         self._last_tick = time.monotonic()
         self._last_mouse_x = 0.0       # 上一帧鼠标 x（转身用）
         self._drag_dx = 0.0            # 鼠标位移累积（指数平滑，慢拖也稳定翻转）
+        self._release_protect_until = 0.0  # 拖拽松手后的贴边冷却截止时间（防误贴边）
+        self._click_pending = False     # 待确认的单击（延迟判定，双击时取消）
+        self._dance_until = 0.0         # 跳舞结束截止时间（防多次双击 timer 堆叠）
 
         # 闲置散步 — walk 状态触发
         self._walk_ready_at = time.monotonic() + random.uniform(25, 60)  # 闲置多久后开始散步
@@ -227,9 +230,11 @@ class PetWindow(QWidget):
             self._bob_y = 0.0
         else:
             # 待机朝向：按位置面向屏幕中心（拖动桌宠后自动转身，不随机）
-            want = self._facing_toward_center()
-            if want != self._facing:
-                self._facing = want
+            # 每 0.1s 更新一次（肉眼无感延迟，避免 60fps 每帧查询屏幕几何）
+            if int(self._anim_t * 10) != int((self._anim_t - dt) * 10):
+                want = self._facing_toward_center()
+                if want != self._facing:
+                    self._facing = want
             s = math.sin(self._anim_t * 1.5) * 0.02
             self._scale_y = 1.0 + s
             self._scale_x = 1.0 - s
@@ -390,7 +395,8 @@ class PetWindow(QWidget):
         self._tilt_v = 0.0
         self._scale_x = self._scale_y = 1.0
         self._bob_x = self._bob_y = 0.0
-        self._facing = 1
+        self._facing = self._facing_toward_center()  # 落地立即面向屏幕中心（替代固定朝右）
+        self._release_protect_until = time.monotonic() + 3.0  # 落地后暂不贴边
         self.move(round(self._px), round(self._py))
         self.set_state("idle")
         self._render()
@@ -429,6 +435,8 @@ class PetWindow(QWidget):
         """检测是否应贴边隐藏/展开"""
         if self._mode != "idle":
             return
+        if time.monotonic() < self._release_protect_until:
+            return  # 拖拽/落地后冷却期内不贴边（防误吸）
         if self._maybe_start_walk():
             return  # 已开始散步，本 tick 不再做贴边检测
         screen = QApplication.screenAt(self.geometry().center())
@@ -561,27 +569,59 @@ class PetWindow(QWidget):
                 self._vx += flick_vx * 0.5
                 self._vy += flick_vy * 0.5
                 mag = math.hypot(self._vx, self._vy)
-                if mag > 2500.0:
-                    self._vx = self._vx / mag * 2500.0
-                    self._vy = self._vy / mag * 2500.0
-                self._mode = "flying"
-                self.set_state("flying")
+                # 松手后 3 秒内不贴边（防止拖到边缘松手就被吸走）
+                self._release_protect_until = time.monotonic() + 3.0
+                if mag < 300.0:
+                    # 甩速小 → 直接停在当前位置（不再重力落回原位）
+                    self._mode = "idle"
+                    self._vx = self._vy = 0.0
+                    self._tilt_angle = 0.0
+                    self._tilt_v = 0.0
+                    self._scale_x = self._scale_y = 1.0
+                    self._bob_x = self._bob_y = 0.0
+                    self._facing = self._facing_toward_center()  # 立即转身面向屏幕中心
+                    self.set_state("idle")
+                    self.config.pet_x = round(self.x())
+                    self.config.pet_y = round(self.y())
+                    self._schedule_walk()
+                else:
+                    if mag > 2500.0:
+                        self._vx = self._vx / mag * 2500.0
+                        self._vy = self._vy / mag * 2500.0
+                    self._mode = "flying"
+                    self.set_state("flying")
             else:
-                # 纯点击 → 打开聊天
+                # 纯点击 → 延迟判定（等双击窗口期，双击时被取消不打开聊天）
                 if self._mode == "walk":
                     self._finish_walk()  # 散步中点击：先站稳
-                self.clicked.emit()
+                self._click_pending = True
+                QTimer.singleShot(QApplication.doubleClickInterval() + 30,
+                                  self._emit_click_if_pending)
                 self.config.pet_x = self.x()
                 self.config.pet_y = self.y()
             self._drag_start = None
             self._is_dragging = False
 
+    def _emit_click_if_pending(self):
+        """单击确认（双击窗口期已过仍未取消 → 打开聊天）"""
+        if self._click_pending:
+            self._click_pending = False
+            self.clicked.emit()
+
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         """双击 — 跳舞动画（即梦生成 8 帧循环，跳 10 秒自动回 idle）"""
         if event.button() == Qt.LeftButton:
+            self._click_pending = False  # 取消挂起的单击（不打开聊天）
             self.set_state("dance")
             self.show_bubble("♪ 来跳支舞吧 ♪", 2000)
-            QTimer.singleShot(10000, lambda: self.set_state("idle"))
+            # 防多次双击 timer 堆叠：记录截止时间，旧 timer 到期时校验
+            self._dance_until = time.monotonic() + 10
+            QTimer.singleShot(10000, self._end_dance)
+
+    def _end_dance(self):
+        """跳舞结束回 idle（校验截止时间，防止被旧 timer 提前打断）"""
+        if time.monotonic() >= self._dance_until:
+            self.set_state("idle")
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
