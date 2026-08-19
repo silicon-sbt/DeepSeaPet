@@ -1,18 +1,19 @@
-# 🐋 深海鲸鱼娘 — DeepSeaPet
+# DeepSeaPet — 深海鲸鱼娘桌宠
 
-一只傲娇的深海鲸鱼娘桌面宠物，基于 PySide6。她是 DeepSeek 的娘化形象 —— 蓝色渐变长发、鲸鱼尾巴头饰、深蓝女仆装。会陪你聊天、在桌面漫步、贴边隐藏、被拎起来甩飞、帮你丢垃圾。
+用 PySide6 做的桌面宠物：一只傲娇的深海鲸鱼娘（DeepSeek 的娘化形象，蓝色长发 + 鲸鱼尾巴 + 女仆装）。会陪你聊天、在桌面散步、贴边藏起来、被拎起来甩飞、帮你扔垃圾。
 
-## 特性
+## 功能
 
-- 🎭 **10 状态动画桌宠** — 待机/行走/跳舞/隐藏/探头/睡觉/开心/趴姿/拎起/飞落，动作由**程序化物理**驱动（60fps 弹簧-阻尼 + 重力 + 镜像/倾斜/缩放变换）
-- 💃 **双击跳舞** — 双击桌宠播放即梦生成的 8 帧舞蹈循环，跳满 10 秒自动回待机
-- 🚶 **自动散步** — 闲置 25-60 秒自动开始散步，**朝向始终面向屏幕中心**（在右侧朝左、左侧朝右，拖动后自动转身）
-- 🖐️ **拎起甩物理** — 按住拖拽弹簧跟随（惊慌表情），松手按甩速抛飞、落地弹跳（闭眼尖叫），拖动方向决定转身
-- 📎 **贴边隐藏** — 靠近屏幕边缘自动吸附露出 60px，鼠标靠近平滑探出
-- 💬 **流式聊天** — 支持 DeepSeek 及任意 OpenAI 兼容 API，对话持久化，透明无边框悬浮气泡窗口
-- 🗑️ **垃圾桶** — 拖放文件到桌宠 → 确认后移入回收站（可记住偏好不再提示）
-- 🚀 **开机自启** — Windows 注册表 Run 键，开机自动启动，打包后指向 exe 自身
-- 🎨 **精灵图素材** — 即梦 Seedance 2.0 I2V 生成待机/走路/跳舞（真实 2D 横版循环），SDXL + IP-Adapter 生成其余状态；**10 状态 × 8 帧统一尺寸**（490px 高、脚底对齐、居中）
+- **桌宠本体**：10 种动画状态（待机 / 行走 / 跳舞 / 隐藏 / 探头 / 睡觉 / 开心 / 趴姿 / 拎起 / 飞落），动作由物理驱动（60fps 弹簧阻尼 + 重力 + 镜像/倾斜/缩放），精灵图来自即梦 I2V 和 SDXL 生成
+- **交互**：
+  - **单击** — 头顶弹出余额云朵：DeepSeek 账户余额（¥ 大字、点击刷新、60 秒自动刷新、金额滚动动画），贴边隐藏时云朵自动收起；启动时后台预取余额，单击即显示
+  - **双击** — 打开聊天窗：卡片式悬浮窗（可拖动、可拖边自由调整大小），流式对话，气泡带尾巴和头像
+  - **三击** — 跳舞（即梦生成的 8 帧舞蹈循环，跳 10 秒自动回待机）
+  - **拖拽** — 拎起甩飞：弹簧跟随 + 松手按甩速抛飞 + 落地弹跳
+- **贴边隐藏**：靠近屏幕边缘自动吸附只露 60px，鼠标靠近平滑探出
+- **垃圾桶**：把文件拖到桌宠身上，确认后进回收站（可记住偏好）
+- **开机自启**：写 Windows 注册表 Run 键，打包后指向 exe 自身
+- **聊天**：支持 DeepSeek 和任意 OpenAI 兼容 API，对话持久化存本地
 
 ## 运行
 
@@ -21,58 +22,28 @@ pip install PySide6 openai send2trash
 python main.py
 ```
 
-打包为单文件 exe：
+打包成单文件 exe：
 
 ```powershell
 pip install pyinstaller
-pyinstaller --onefile --windowed --name DeepSeaPet main.py
+pyinstaller --onefile --windowed --name DeepSeaPet --add-data "module_5_assets;module_5_assets" main.py
 ```
 
-依赖只有 3 个 pip 包：`PySide6`、`openai`、`send2trash`，其余全是标准库。
-
-## 技术栈
-
-| 层 | 技术 |
-|---|---|
-| UI | PySide6（透明无边框置顶窗口，QPainter 程序化变换渲染） |
-| AI 对话 | OpenAI SDK（兼容 DeepSeek / 自定义 API，流式输出） |
-| 精灵图 | 即梦 Seedance 2.0 I2V（`autodl_tools/imeng_walk.py`）+ SDXL img2img + IP-Adapter（AutoDL GPU） |
-| 配置 | JSON（%APPDATA%/DeepSeaPet/） |
-| 打包 | PyInstaller → 单文件 exe |
-
-## 动画机制
-
-`AnimationController` 管理状态机（idle/walk/dance/hide/peek/sleep/happy/lying/held/flying），walk/dance 加载全部 8 帧做真实循环动画，其余状态取帧 0 作静态底图。动作交给程序化变换：`PetWindow._render` 用 QPainter 叠加**镜像 + 倾斜 + 缩放 + 位移**，60fps 物理 timer 常驻驱动。
-
-- **idle** 呼吸：`sin(t*1.5)*0.02` Y 向缩放，朝向按窗口位置自动面向屏幕中心
-- **dance** 双击：8 帧即梦舞蹈循环，10 秒自动回待机
-- **walk** 散步：8 帧步态循环 + 水平移动，朝向屏幕中心
-- **happy** 双击跳跃：`-40*sin(π*t/2)` 抛物线
-- **held/flying** 拎起甩物理：弹簧-阻尼跟随（K=200/C=28），松手后重力落地弹跳（G=2000/REST=0.55），甩速方向决定转身
-- **hide/peek** 贴边：弹簧平滑逼近目标位置
-
-## 结构
+## 目录
 
 ```
-deepseek桌宠/
-├── main.py                 # 入口 + 托盘 + App 生命周期
-├── module_1_core/          # 桌宠窗口 + 动画控制器（程序化动画核心）
-├── module_2_api/           # API 客户端 + 配置管理
-├── module_3_chat/          # 聊天窗口 + 对话存储 + 打招呼
-├── module_4_system/        # 垃圾桶 + 开机自启
-├── module_5_assets/        # 精灵图素材（10 状态 × 8 帧 PNG，统一尺寸）
-└── autodl_tools/           # 即梦 I2V + AutoDL 远程精灵图生成辅助脚本
+main.py                 # 入口 + 托盘 + 应用生命周期
+module_1_core/          # 桌宠窗口 + 动画控制器（程序化动画 + 余额云朵）
+module_2_api/           # API 客户端（对话 / 余额查询）+ 配置
+module_3_chat/          # 聊天窗口 + 对话存储 + 打招呼
+module_4_system/        # 垃圾桶 + 开机自启
+module_5_assets/        # 精灵图素材（10 状态 × 8 帧 PNG）
+autodl_tools/           # 精灵图远程生成脚本（即梦 I2V / SDXL）
 ```
 
-## 贡献者
+## 致谢
 
-| 角色 | 贡献 |
-|---|---|
-| 🧑‍💻 **silicon-sbt** | 项目发起、架构设计 |
-| 🤖 **DeepSeek** | AI 代码生成 & 精灵图创作 |
-| 🤖 **Claude Code** | AI 编程助手，全程参与开发 |
-
-> 本项目由人类与 AI 协作完成 ✨
+余额云朵的灵感来自 [DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)（MeteorNOX 的 DSH 小鲸鱼余额挂件：盯着 DeepSeek 账户余额的小鲸鱼，¥ 大字金额、点击刷新、金额滚动动画——这些理念都搬了过来）。
 
 ## 许可
 

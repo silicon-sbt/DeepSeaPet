@@ -8,9 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 运行桌宠（开发模式）
 python main.py
 
-# 打包为单文件 exe
+# 打包为单文件 exe（必须 --add-data 带上精灵图素材，否则 exe 里没有 sprites → 全部回退占位图）
 pip install pyinstaller
-pyinstaller --onefile --windowed --name DeepSeaPet main.py
+pyinstaller --onefile --windowed --name DeepSeaPet --add-data "module_5_assets;module_5_assets" main.py
 ```
 
 依赖只有 3 个 pip 包：`PySide6`、`openai`、`send2trash`，其余全是标准库。
@@ -21,7 +21,9 @@ pyinstaller --onefile --windowed --name DeepSeaPet main.py
 
 ### 启动链
 
-`main.py` → `App.__init__` → 创建 `ConfigManager`（单例）→ 托盘图标（代码绘制鲸鱼娘 icon）→ `PetWindow` → 启动打招呼气泡。点击桌宠懒加载 `ChatWindow`。托盘菜单集成 API 配置、自启开关、退出。
+`main.py` → `App.__init__` → 创建 `ConfigManager`（单例）→ 托盘图标（代码绘制鲸鱼娘 icon）→ `PetWindow` → 启动打招呼气泡 + 1.5s 后台预取余额（`_prefetch_balance` → 模块缓存 `_balance_cache`，单击云朵秒显余额）。托盘菜单集成 API 配置、自启开关、退出。
+
+**桌宠交互**（全部在 `PetWindow` 鼠标事件内判定）：**单击** = 余额云朵（`show_balance_bubble` toggle；贴边隐藏时 `snap_to_edge` 自动收起）、**双击** = 聊天窗（信号 `chat_requested` → `_on_pet_chat_requested` 懒加载 `ChatWindow`）、**三击** = 跳舞（自研判定：`TRIPLE_SPAN=0.75`s 内三次点击即跳舞，不依赖 Qt 双击事件；`_start_dance` 先强制 `_mode="idle"` 放行 `set_state` 门控）。单击确认 `CLICK_CONFIRM_MS=300`、双击/三击保护期 `_dbl_guard_until`、三击窗口 `TRIPLE_WINDOW=0.45`、单击代际 `_click_gen` 作废旧确认定时。
 
 ### 配置流
 
@@ -29,13 +31,17 @@ pyinstaller --onefile --windowed --name DeepSeaPet main.py
 
 ### 动画流
 
-`AnimationController` 管理状态机（idle/walk/hide/peek/sleep/happy/**lying**/**held**/**flying**），每状态只从 `module_5_assets/sprites/{state}_*.png` 加载**帧 0 作静态底图**（`load_from_dir` 只取 `[:1]`），无素材时用 `make_placeholder_frames()` 代码绘制 Q版鲸鱼娘。动作交给**程序化变换**而非逐帧序列：`PetWindow._render` 用 QPainter 叠加 **镜像(`_facing`)**+倾斜(`_tilt_angle`)+缩放(`_scale_x/_scale_y`)+位移(`_bob_x/_bob_y`)，60fps 物理 timer 常驻驱动。变换顺序 `translate(half) → scale(_facing,1) → rotate(_tilt_angle*_facing) → scale(sx,sy) → translate(bob) → draw(-half,-half)`；镜像用 `rotate(angle*_facing)` 反角补偿，使视觉倾倒方向不随镜像翻转。idle 呼吸 `sin(t*1.5)*0.02`、happy 双击跳跃 `-40*sin(π*t/2)`、held/flying 走弹簧+重力物理、hide/peek 走弹簧逼近 `_start_slide`。`_anim_t` 为统一动画相位，`set_state` 切状态时重置。`lying` 状态为横向趴姿，用于聊天窗口。
+`AnimationController` 管理状态机（idle/walk/hide/peek/sleep/happy/**lying**/**held**/**flying**），每状态只从 `module_5_assets/sprites/{state}_*.png` 加载**帧 0 作静态底图**（`load_from_dir` 只取 `[:1]`），无素材时用 `make_placeholder_frames()` 代码绘制 Q版鲸鱼娘。动作交给**程序化变换**而非逐帧序列：`PetWindow._render` 用 QPainter 叠加 **镜像(`_facing`)**+倾斜(`_tilt_angle`)+缩放(`_scale_x/_scale_y`)+位移(`_bob_x/_bob_y`)，60fps 物理 timer 常驻驱动。变换顺序 `translate(half) → scale(_facing,1) → rotate(_tilt_angle*_facing) → scale(sx,sy) → translate(bob) → draw(-half,-half)`；镜像用 `rotate(angle*_facing)` 反角补偿，使视觉倾倒方向不随镜像翻转。idle 呼吸 `sin(t*1.5)*0.02`、happy 双击跳跃 `-40*sin(π*t/2)`、held/flying 走弹簧+重力物理、hide/peek 走弹簧逼近 `_start_slide`。`_anim_t` 为统一动画相位，`set_state` 切状态时重置。`lying` 状态为横向趴姿。**注意** `set_state` 有门控：`_mode != "idle"` 时只放行 held/flying，其余状态被拒（跳舞前需先回 idle）。
 
 ### 聊天流
 
 `ChatWindow._send()` → 后台线程调 `ApiClient.chat_stream()` → 逐 token 通过 `Signal` 跨线程回主线程 → `_on_stream_tick` 更新 HTML 气泡。`ApiClient` 包装 OpenAI SDK，自动兼容 DeepSeek 和自定义 OpenAI 兼容 API。
 
-**聊天窗口 UI**：500×380 全透明无边框悬浮窗。上部透明消息区（气泡浮动在桌面），底部 `InputBar`（`paintEvent` 自绘圆角蓝边白底输入条，22px 圆角，3px `#4A9EFF` 边框）。右上角自绘 ✕ 关闭按钮（24px 白底圆钮，hover 变红），无边框窗口的唯一关闭入口。左上角鲸鱼娘趴姿叠在输入条左上方，独立透明 QWidget。窗口 80% 透明度，拖拽移动，Ctrl+Enter 发送。
+**聊天窗口 UI**（`module_3_chat/chat_window.py`，520×450 可调整大小）：深海主题卡片式悬浮窗——`paintEvent` 手绘 7 层柔和阴影 + 渐变卡片背景（`WA_TranslucentBackground`），**四边/四角可自由调整大小**（最小 400×360；app 级 `eventFilter` 统一接管鼠标：8px 边缘检测 → `startSystemResize` 原生缩放、悬停光标反馈、空白区拖拽移动、输入框内按下不误拖）。结构：header（圆形鲸鱼娘头像 idle 图 + 名字 + 在线点 + 32px 圆润关闭钮）→ 1px 淡蓝分隔线 → 消息区（**尾巴气泡** `ChatBubble`：QPainter 四角独立圆角 + 三角尾巴 + 渐变，AI 白→浅蓝左尾配圆形头像，用户蓝渐变右尾配蓝底"我"头像；**打字指示器** `TypingBubble` 三点弹跳动画，首 token 到达自动替换为真实气泡）→ 胶囊输入区（浅蓝底圆角输入框 + 圆形渐变发送钮）。气泡淡入动画，Ctrl+Enter 发送。
+
+### 余额云朵（BalanceBubble）
+
+**独立透明悬浮窗**（`Qt.Tool|Frameless|StaysOnTop`，340×200），显示在桌宠**正上方**（`place_above`：水平居中、顶部 18px、底部小尾巴指向角色；顶部放不下时自动落到下方、尾巴翻转朝上）。**云朵形状**：`QPainterPath` 5 圆并集（必须 `setFillRule(Qt.WindingFill)`——默认 OddEvenFill 会把圆重叠区镂空成洞！）+ 内部底部渐变阴影（clip 在云朵内，无外溢像素；**透明顶层窗口禁用 `QGraphicsDropShadowEffect`**——阴影外扩超出窗口边界会触发 Windows `UpdateLayeredWindowIndirect` 报错）。功能：点击刷新、60s 自动刷新（`_auto_timer`）、金额滚动动画（QTimer 20ms 缓动插值）、启动预取缓存秒显。`moveEvent` 跟随桌宠移动。
 
 ### 贴边隐藏
 

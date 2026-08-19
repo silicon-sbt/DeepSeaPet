@@ -87,6 +87,33 @@
 | 6 | shutil.copy2 保留 mtime | 替换文件后 mtime 不变 | copy2 复制元数据 | 判断"文件何时被改"要用内容对比，别信 mtime |
 | 7 | SetWindowPos 移动后桌宠自己接管 | 窗口位置又变了 | 桌宠内部 _px 未同步，物理 timer 会 move 回去 | 移动桌宠窗口要用它自己的机制（config 位置 + 重启） |
 | 8 | 进程不重启 = 旧素材 | 改了素材用户还看到旧的 | QPixmap 在进程启动时加载到内存 | 改素材后必须重启桌宠（已养成自动重启习惯） |
+## 2. DeepSeek Harness 会话（2026-08，余额云朵 + 聊天 UI 重做 + 交互重排）
+
+### 2.1 余额云朵（理念来自 DeepSeek-Balance-Whale-Widget）
+- **需求**：把 MeteorNOX/DeepSeek-Balance-Whale-Widget 的"显示余额"理念搬过来，做成云朵气泡，显示在角色上方
+- **实现**：
+  1. `ApiClient.get_balance()`：urllib 直调 `GET /user/balance`（无新依赖，仅 DeepSeek；401→AuthError、超时→NetworkError、自定义 API→None）
+  2. `BalanceBubble`：独立透明悬浮窗（Tool|Frameless|StaysOnTop），云朵 = QPainterPath 5 圆并集 + 底部小尾巴，显示在桌宠正上方（place_above，顶部放不下自动落下+尾巴翻转）
+  3. 点击刷新、60s 自动刷新、金额滚动动画（QTimer 20ms 缓动）、启动 1.5s 后台预取缓存秒显、moveEvent 跟随、贴边隐藏自动收起
+- **踩坑（重要）**：
+  1. `QPainterPath` 默认 OddEvenFill → 多圆并集的重叠区被镂空成洞（2868px 空洞）→ 必须 `setFillRule(Qt.WindingFill)`
+  2. 透明顶层窗口挂 `QGraphicsDropShadowEffect` → 阴影外扩超出窗口边界 → Windows `UpdateLayeredWindowIndirect` 持续报"参数错误" → 阴影改 paintEvent 内手绘（clip 在云朵内）
+  3. 多圆并集时 QPainter 抗锯齿会在圆交界处留单像素缝隙（不可见，可忽略）
+
+### 2.2 聊天窗口 UI 重做
+- **需求**：旧聊天 UI"太丑"，要求重做成好看的卡片式，可拖动可自由调整大小
+- **实现**：深海主题卡片（手绘 7 层阴影+渐变背景）、header（圆形头像+名字+在线点+32px 关闭钮）、尾巴气泡（四角独立圆角 QPainterPath + 三角尾巴 + 渐变 + 圆形头像）、TypingBubble 三点弹跳打字指示器（首 token 自动替换）、胶囊输入区、app 级 eventFilter 统一接管拖拽/边缘 resize（startSystemResize）/光标反馈
+- **视觉自审**：本地 Ollama qwen2.5vl:7b 多轮审查（deepseek-img skill 同款管线），最终 8-9 分
+
+### 2.3 交互重排（单击/双击/三击）
+- 单击 = 余额云朵（toggle）、双击 = 聊天窗、三击 = 跳舞（原双击跳舞、单击聊天）
+- **三击自研判定**：750ms 内三次独立点击即跳舞，不依赖 Qt 双击事件（Qt 判定慢时三击会退化成单击）；`_click_gen` 代际作废旧确认定时；`_start_dance` 先强制 `_mode="idle"` 放行 set_state 门控（贴边滑行/散步中也能跳舞）
+- **坑**：Qt 定时器可能提前几毫秒触发，严格 `>= TRIPLE_WINDOW` 边界会漏判（双击开聊天失效）→ 判定留 20ms 余量 + 定时延后 50ms
+
+### 2.4 其他
+- 余额/聊天回归测试：`_pet_balance_test.py`（32 项）+ `_regression_test.py`（35 项），offscreen 离屏渲染 + qwen2.5vl 视觉自审
+- 打包：PyInstaller --onefile --windowed
+
 | 9 | GFW git push | SSH 22 端口大流量被重置 | GFW 阻断 | 443 端口 SSH + 每批 <=1MB commit 逐批 push |
 | 10 | llava 视觉判断不可靠 | 尾巴/绿幕多次误判 | llava:7b 对细节理解差 | 关键判断用像素分析（颜色/位置/alpha），llava 只做辅助 |
 

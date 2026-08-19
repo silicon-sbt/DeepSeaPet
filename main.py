@@ -99,6 +99,7 @@ class App:
         from module_1_core.pet_window import PetWindow
         self.pet = PetWindow(self.config)
         self.pet.clicked.connect(self._on_pet_clicked)
+        self.pet.chat_requested.connect(self._on_pet_chat_requested)
         self.pet.files_dropped.connect(self._on_files_dropped)
         self.pet.show()
         self.pet.raise_()  # 强制置顶
@@ -113,6 +114,14 @@ class App:
             QTimer.singleShot(1000, lambda: self.pet.show_bubble(msg, 5000))
 
     def _on_pet_clicked(self):
+        """单击桌宠 → 显示/隐藏余额气泡（理念致敬 DeepSeek-Balance-Whale-Widget）"""
+        try:
+            self.pet.show_balance_bubble()
+        except ImportError:
+            self.pet.show_bubble("余额模块还在开发中哦~", 2000)
+
+    def _on_pet_chat_requested(self):
+        """双击桌宠 → 打开聊天窗"""
         try:
             from module_3_chat.chat_window import ChatWindow
             if not hasattr(self, "chat_win") or self.chat_win is None:

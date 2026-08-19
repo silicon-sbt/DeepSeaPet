@@ -100,6 +100,40 @@ class ApiClient:
         """一次性返回完整回复"""
         return "".join(self.chat_stream(messages, model))
 
+    # ── 余额查询（仅 DeepSeek）────────────
+
+    def get_balance(self):
+        """查询 DeepSeek 账户余额 → (balance: float, currency: str)
+
+        自定义 OpenAI 兼容 API 不支持余额接口时返回 None；
+        未配置 / 网络 / 鉴权失败抛对应 Api*Error。
+        """
+        if not self._config.api_key:
+            raise ApiConfigError("API 未配置，请先设置 API Key")
+        if self.api_type != "deepseek":
+            return None
+        import json
+        import urllib.request
+        base = (self._config.api_base or "https://api.deepseek.com").rstrip("/")
+        req = urllib.request.Request(
+            base + "/user/balance",
+            headers={"Authorization": f"Bearer {self._config.api_key}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                raise ApiAuthError("API Key 无效")
+            raise ApiNetworkError(f"余额查询失败 (HTTP {e.code})")
+        except Exception as e:
+            raise ApiNetworkError(f"余额查询失败: {e}")
+        infos = data.get("balance_infos") or []
+        if not infos:
+            return None
+        first = infos[0]
+        return float(first.get("total_balance", 0.0)), first.get("currency", "CNY")
+
     # ── 连通性测试 ─────────────────────────
 
     def ping(self) -> bool:

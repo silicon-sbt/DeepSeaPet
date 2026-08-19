@@ -1,4 +1,5 @@
 """动画状态机 + 帧序列管理"""
+import sys
 from enum import Enum
 from pathlib import Path
 from PySide6.QtGui import QPixmap
@@ -18,8 +19,11 @@ class PetState(Enum):
     FLYING = "flying"  # 甩飞/下落（闭眼尖叫）
 
 
-# 精灵图目录
-SPRITE_DIR = Path(__file__).parent.parent / "module_5_assets" / "sprites"
+# 精灵图目录（PyInstaller 打包后资源解包到 sys._MEIPASS）
+if getattr(sys, "frozen", False):
+    SPRITE_DIR = Path(sys._MEIPASS) / "module_5_assets" / "sprites"
+else:
+    SPRITE_DIR = Path(__file__).parent.parent / "module_5_assets" / "sprites"
 
 
 class AnimationController(QObject):
