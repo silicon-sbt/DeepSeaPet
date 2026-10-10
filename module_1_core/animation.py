@@ -96,7 +96,7 @@ class AnimationController(QObject):
 def make_placeholder_sprite(state: PetState, size=256):
     """Q版鲸鱼娘 — chibi 比例，日式大眼，蓝发女仆"""
     from PySide6.QtGui import (QPainter, QColor, QPen, QBrush, QFont,
-                                 QPainterPath, QLinearGradient, QRadialGradient)
+                                 QPainterPath, QRadialGradient)
     from PySide6.QtCore import Qt, QRectF, QPointF
 
     s = size

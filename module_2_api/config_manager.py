@@ -1,24 +1,67 @@
-"""配置管理器 — 单例 JSON 持久化"""
+"""配置管理器 — 单例 JSON 持久化
+
+写盘一律走原子替换（临时文件 + os.replace）：配置文件里存着 API Key，
+直接覆盖写一旦中途失败（进程被杀 / 断电），留下的就是半截 JSON。
+读取遇到坏文件时先备份成 .corrupt 再回落默认值——解析失败绝不能把用户数据悄悄清掉。
+"""
 import json
 import os
+import shutil
+import sys
 from pathlib import Path
 
-CONFIG_DIR = Path(os.getenv("APPDATA", "")) / "DeepSeaPet"
+CONFIG_DIR = Path(os.getenv("APPDATA") or Path.home()) / "DeepSeaPet"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+
+# 默认模型只在这里定义一次，main.py / api_client.py 都引用这个常量
+DEFAULT_MODEL = "deepseek-v4-flash"
+
+# 聊天窗默认尺寸。旧版 DEFAULT_CONFIG 里写的 (400, 600) 从未被任何代码读取过，
+# 读到这一对就说明是历史遗留值而不是用户改过的尺寸，按"未设置"处理。
+DEFAULT_CHAT_W, DEFAULT_CHAT_H = 520, 450
+_LEGACY_CHAT_SIZE = (400, 600)
 
 DEFAULT_CONFIG = {
     "api_type": "",        # "deepseek" | "custom" | ""
     "api_key": "",
     "api_base": "",        # 仅 custom 时生效
-    "api_model": "deepseek-v4-flash",
+    "api_model": DEFAULT_MODEL,
     "auto_start": False,
     "confirm_delete": True,
-    "has_greeted": False,
     "pet_x": 100,
     "pet_y": 100,
-    "chat_w": 400,
-    "chat_h": 600,
+    "chat_w": DEFAULT_CHAT_W,
+    "chat_h": DEFAULT_CHAT_H,
 }
+
+
+def atomic_write_json(path: Path, data) -> None:
+    """原子写 JSON：同目录临时文件 → fsync → os.replace（同分区 rename 是原子的）"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def load_json(path: Path):
+    """读 JSON；文件损坏时备份为 .corrupt 并返回 None，不覆盖原文件"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        backup = path.with_suffix(path.suffix + ".corrupt")
+        try:
+            shutil.copy2(path, backup)
+            print(f"[config] {path.name} 解析失败（{e}），已备份为 {backup.name}，本次使用默认值",
+                  file=sys.stderr)
+        except OSError:
+            pass
+        return None
 
 
 class ConfigManager:
@@ -42,20 +85,23 @@ class ConfigManager:
         return self._data.get(key, default)
 
     def set(self, key, value):
+        if self._data.get(key) == value:
+            return                      # 值没变就不落盘，避免无谓写盘
         self._data[key] = value
         self.save()
 
     def load(self):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                stored = json.load(f)
+        stored = load_json(CONFIG_FILE)
+        if stored is None:
+            self.save()                 # 首次运行（或坏文件已备份）落一份默认配置
+            return
+        if isinstance(stored, dict):
             self._data.update(stored)
-        except (FileNotFoundError, json.JSONDecodeError):
-            self.save()
+        if (self._data.get("chat_w"), self._data.get("chat_h")) == _LEGACY_CHAT_SIZE:
+            self._data["chat_w"], self._data["chat_h"] = DEFAULT_CHAT_W, DEFAULT_CHAT_H
 
     def save(self):
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(CONFIG_FILE, self._data)
 
     # ── 便捷属性 ──────────────────────────
 
@@ -94,12 +140,6 @@ class ConfigManager:
 
     @confirm_delete.setter
     def confirm_delete(self, v): self.set("confirm_delete", v)
-
-    @property
-    def has_greeted(self):     return self._data["has_greeted"]
-
-    @has_greeted.setter
-    def has_greeted(self, v):  self.set("has_greeted", v)
 
     @property
     def pet_x(self):           return self._data["pet_x"]

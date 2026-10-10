@@ -17,13 +17,23 @@ pyinstaller --onefile --windowed --name DeepSeaPet --add-data "module_5_assets;m
 
 ## 架构
 
-10 个源文件构成桌宠本体（含入口 main.py），其余是 AutoDL 远程精灵图生成的辅助脚本。托盘逻辑内联在 `main.py`——没有独立的 `tray.py`。
+桌宠本体 12 个源文件（含入口 `main.py`）：`module_1_core/`（窗口 + 动画 + 余额气泡）、`module_2_api/`（配置 + 客户端）、`module_3_chat/`（窗口 + 控件 + 主题 + 存储 + 打招呼）、`module_4_system/`（托盘 + 垃圾桶 + 自启）。其余是 AutoDL 远程精灵图生成的辅助脚本。
+
+**2026-10 重构后的文件划分**（只拆文件，没动动画/物理逻辑）：
+
+| 文件 | 职责 |
+|------|------|
+| `main.py` | 只做组装：桌宠 + 托盘，接信号（约 90 行） |
+| `module_1_core/pet_window.py` | 桌宠窗口：交互判定、甩飞物理、贴边、散步 |
+| `module_1_core/balance_bubble.py` | 余额云朵（独立悬浮窗 + 预取缓存 `_balance_cache`） |
+| `module_3_chat/theme.py` / `widgets.py` | 配色与绘制工具 / 气泡·输入条控件 |
+| `module_4_system/tray.py` | 托盘图标 + API 设置对话框 |
 
 ### 启动链
 
-`main.py` → `App.__init__` → 创建 `ConfigManager`（单例）→ 托盘图标（代码绘制鲸鱼娘 icon）→ `PetWindow` → 启动打招呼气泡 + 1.5s 后台预取余额（`_prefetch_balance` → 模块缓存 `_balance_cache`，单击云朵秒显余额）。托盘菜单集成 API 配置、自启开关、退出。
+`main.py` → `App.__init__` → 创建 `ConfigManager`（单例）→ `PetWindow` → `TrayIcon`（`module_4_system/tray.py`，图标优先用 `icon.ico`，缺素材退回代码绘制）→ 启动打招呼气泡 + 1.5s 后台预取余额（`balance_bubble._prefetch_balance` → 模块缓存 `_balance_cache`，单击云朵秒显余额）。托盘菜单集成 API 配置、自启开关、退出。**打招呼每次启动都播**（需求原文：「设置好 api 时或者是每次打开软件时播放」），已去掉一次性的 `has_greeted` 标记；未配置 API key 时不播。
 
-**桌宠交互**（全部在 `PetWindow` 鼠标事件内判定）：**单击** = 余额云朵（`show_balance_bubble` toggle；贴边隐藏时 `snap_to_edge` 自动收起）、**双击** = 聊天窗（信号 `chat_requested` → `_on_pet_chat_requested` 懒加载 `ChatWindow`）、**三击** = 跳舞（自研判定：`TRIPLE_SPAN=0.75`s 内三次点击即跳舞，不依赖 Qt 双击事件；`_start_dance` 先强制 `_mode="idle"` 放行 `set_state` 门控）。单击确认 `CLICK_CONFIRM_MS=300`、双击/三击保护期 `_dbl_guard_until`、三击窗口 `TRIPLE_WINDOW=0.45`、单击代际 `_click_gen` 作废旧确认定时。
+**桌宠交互**（全部在 `PetWindow` 鼠标事件内判定）：**单击** = 余额云朵（`show_balance_bubble` toggle；贴边隐藏时 `snap_to_edge` 自动收起）、**双击** = 聊天窗（信号 `chat_requested` → `App._open_chat` 懒加载 `ChatWindow`）、**三击** = 跳舞（自研判定：`TRIPLE_SPAN=0.75`s 内三次点击即跳舞，不依赖 Qt 双击事件；`_start_dance` 先强制 `_mode="idle"` 放行 `set_state` 门控）。单击确认 `CLICK_CONFIRM_MS=300`、双击/三击保护期 `_dbl_guard_until`、三击窗口 `TRIPLE_WINDOW=0.45`、单击代际 `_click_gen` 作废旧确认定时。
 
 ### 配置流
 
@@ -37,9 +47,11 @@ pyinstaller --onefile --windowed --name DeepSeaPet --add-data "module_5_assets;m
 
 `ChatWindow._send()` → 后台线程调 `ApiClient.chat_stream()` → 逐 token 通过 `Signal` 跨线程回主线程 → `_on_stream_tick` 更新 HTML 气泡。`ApiClient` 包装 OpenAI SDK，自动兼容 DeepSeek 和自定义 OpenAI 兼容 API。
 
-**聊天窗口 UI**（`module_3_chat/chat_window.py`，520×450 可调整大小）：深海主题卡片式悬浮窗——`paintEvent` 手绘 7 层柔和阴影 + 渐变卡片背景（`WA_TranslucentBackground`），**四边/四角可自由调整大小**（最小 400×360；app 级 `eventFilter` 统一接管鼠标：8px 边缘检测 → `startSystemResize` 原生缩放、悬停光标反馈、空白区拖拽移动、输入框内按下不误拖）。结构：header（圆形鲸鱼娘头像 idle 图 + 名字 + 在线点 + 32px 圆润关闭钮）→ 1px 淡蓝分隔线 → 消息区（**尾巴气泡** `ChatBubble`：QPainter 四角独立圆角 + 三角尾巴 + 渐变，AI 白→浅蓝左尾配圆形头像，用户蓝渐变右尾配蓝底"我"头像；**打字指示器** `TypingBubble` 三点弹跳动画，首 token 到达自动替换为真实气泡）→ 胶囊输入区（浅蓝底圆角输入框 + 圆形渐变发送钮）。气泡淡入动画，Ctrl+Enter 发送。
+**聊天窗口 UI**（`module_3_chat/chat_window.py`，520×450 可调整大小）：深海主题卡片式悬浮窗——`paintEvent` 手绘 7 层柔和阴影 + 渐变卡片背景（`WA_TranslucentBackground`），**四边/四角可自由调整大小**（最小 400×360；app 级 `eventFilter` 统一接管鼠标：8px 边缘检测 → `startSystemResize` 原生缩放、悬停光标反馈、空白区拖拽移动、输入框内按下不误拖）。结构：header（圆形鲸鱼娘头像 idle 图 + 名字 + 在线点 + 32px 圆润关闭钮）→ 1px 淡蓝分隔线 → 消息区（**尾巴气泡** `ChatBubble`：QPainter 四角独立圆角 + 三角尾巴 + 渐变，AI 白→浅蓝左尾配圆形头像，用户蓝渐变右尾配蓝底"我"头像；**打字指示器** `TypingBubble` 三点弹跳动画，首 token 到达自动替换为真实气泡）→ 胶囊输入区（浅蓝底圆角输入框 + 圆形渐变发送钮）。气泡淡入动画，Ctrl+Enter 发送。header 右侧 **＋ 按钮 = 开新对话**（`_new_conversation`：新建会话 + 清空消息区 + 重新打招呼）。窗口尺寸在 `hideEvent` 里存 `config.chat_w/chat_h`、启动时恢复（写在 `resizeEvent` 会变成每像素一次 JSON 写）。
 
-### 余额云朵（BalanceBubble）
+**气泡文本一律转义**（`theme.to_html`）：QLabel 是 `Qt.RichText`，模型吐出的 `<` 或用户输入的标签会被当标记解析。`ChatBubble.text()` 返回原始文本，转义只发生在渲染那一步；换行写 `\n`，由 `to_html` 转成 `<br>`——**别再往气泡文本里直接写 `<br>`**。
+
+### 余额云朵（BalanceBubble，在 `module_1_core/balance_bubble.py`）
 
 **独立透明悬浮窗**（`Qt.Tool|Frameless|StaysOnTop`，340×200），显示在桌宠**正上方**（`place_above`：水平居中、顶部 18px、底部小尾巴指向角色；顶部放不下时自动落到下方、尾巴翻转朝上）。**云朵形状**：`QPainterPath` 5 圆并集（必须 `setFillRule(Qt.WindingFill)`——默认 OddEvenFill 会把圆重叠区镂空成洞！）+ 内部底部渐变阴影（clip 在云朵内，无外溢像素；**透明顶层窗口禁用 `QGraphicsDropShadowEffect`**——阴影外扩超出窗口边界会触发 Windows `UpdateLayeredWindowIndirect` 报错）。功能：点击刷新、60s 自动刷新（`_auto_timer`）、金额滚动动画（QTimer 20ms 缓动插值）、启动预取缓存秒显。`moveEvent` 跟随桌宠移动。
 
@@ -53,11 +65,11 @@ pyinstaller --onefile --windowed --name DeepSeaPet --add-data "module_5_assets;m
 
 ### 垃圾桶
 
-拖放文件到桌宠 → `PetWindow.dropEvent` → 信号 `files_dropped` → `TrashHandler.handle` → `send2trash`。默认弹确认框，可勾选"不再提示"写入 config。
+拖放文件到桌宠 → `PetWindow.dropEvent` → 信号 `files_dropped` → `TrashHandler.handle` → `send2trash`。默认弹确认框，可勾选"不再提示"写入 config。返回 `{success, failed, errors}`，失败原因进 `errors`（每个文件独立），气泡会如实报「几个没成功 + 原因」——不再只报成功数。
 
 ### 开机自启
 
-`AutoStartManager` → Windows 注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，指向当前 Python 解释器 + main.py 路径（打包后指向 exe 自身）。
+`AutoStartManager` → Windows 注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，指向当前 Python 解释器 + main.py 路径（打包后指向 exe 自身）。**勾选状态一律回读注册表**（`is_enabled()`）：写注册表失败会弹警告，绝不假装成功——以前吞掉 `OSError` 还弹「已开启」，用户要等到下次开机才发现没生效。
 
 ## AutoDL 精灵图生成
 
@@ -140,12 +152,12 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 | `_ascii_view.py` | ASCII 渲染基准图/生成帧（无视觉环境备选） |
 | `generate_sprites.py` | 纯 SDXL img2img 精灵图（**已弃用**，无 IP-Adapter，一致性不达标） |
 | `animation_design.md` | 7 状态 × 8 帧的详细动画设计文档（中文） |
-| `upload_and_run.py` | SFTP 上传 + 前台执行（实时打印输出） |
+| `upload_and_run.py` | SFTP 上传 + 前台执行（实时打印输出；连接走 `conn.py`） |
 | `run_remote.py` | SSH 执行单条命令 |
-| `multi_upload.py` | 多线程断点续传（上传模型用，已弃用） |
-| `resume_upload.py` | 单线程断点续传（已弃用，密码过期勿用） |
+| `multi_upload.py` | 多线程断点续传（上传模型用；连接走 `conn.py`） |
+| `resume_upload.py` | 单线程断点续传（已弃用，太慢；连接走 `conn.py`） |
 | `test_net.py` | 测试 AutoDL 网络连通性 |
-| `check_server.py` | 检查服务器环境（已弃用） |
+| `check_server.py` | 检查服务器环境（已弃用，连接走 `conn.py`） |
 | `setup_comfyui.py` | ComfyUI 安装脚本（已弃用） |
 | `ssh` | 当前实例连接信息（唯一凭据源，conn.py 读取） |
 
@@ -153,7 +165,7 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 
 ### 操作注意
 
-- **连接信息只改 `autodl_tools/ssh`**：克隆实例后端口/密码必变，只改这一个文件，`conn.py` 自动解析；勿在脚本里硬编码（resume_upload.py 等遗留脚本的密码已过期）。
+- **连接信息只改 `autodl_tools/ssh`**：克隆实例后端口/密码必变，只改这一个文件，`conn.py` 自动解析。**所有脚本统一走 `conn.connect()`，脚本里不留 host/port/密码**——2026-10 已把 `upload_and_run.py`、`resume_upload.py`、`multi_upload.py`、`check_server.py` 改成走 `conn.py`。
 - **run_remote.py 传参坑**：PowerShell 传双引号给 python.exe 会被 Windows C runtime 剥掉。远端命令用**单引号**：`run_remote.py "/root/miniconda3/bin/python -c 'import torch; print(torch.cuda.is_available())'"`
 - **pkill 自杀陷阱**：`pkill -f` 的 pattern 会匹配到当前执行命令自身命令行，杀掉自己。后台任务重启时不要带 pkill。
 - **下载完整性**：文件大小对≠内容完整——分块下载失败会留空洞（UMT5 曾因此损坏，`torch.load` 报 `KeyError: 'storages' not found`）。以 `_fast_download.py` 的 `.done` 标记为准；UMT5 是 ZIP 格式，用文件头 `PK\x03\x04` 验证，不是 `tar -tf`。
@@ -173,4 +185,5 @@ distill_fp8 是分片格式但**无 `model_index.json`**，需 `_build_pipeline.
 - **22 端口 SSH**：316KB 代码勉强能过，≥2MB 必被重置。
 - **443 端口 SSH**（`git -c core.sshCommand="ssh -p 443 -o HostName=ssh.github.com" push`）：阈值更高，但 ~2.4MB 以上仍是概率性失败。
 - **稳定方案**：443 端口 + **小批量拆分**——每批 ≤1.2MB（约 4 帧 PNG）连续成功；失败就 `git reset --soft HEAD~1 && git reset HEAD` 拆更小再推。21MB 素材最终拆成 ~20 个 commit 推完。
-- **敏感文件**（`api火山`、`autodl_tools/ssh`、`config.json`、`conversations.json`、硬编码密码的 `_test_ssh.py/_deploy.py/_check_env.py`）已在 `.gitignore`，提交前用 `git ls-files | grep -iE ...` 复查。`imeng_walk.py` **不在** gitignore，但已改纯 env-only（无 key 默认值）——提交前必须再 grep 确认无 `IMENG_KEY` 硬编码。
+- **敏感文件**（`api火山`、`autodl_tools/ssh`、`config.json`、`conversations.json`、`HANDOFF_walk_video.md`、`_test_ssh.py/_deploy.py/_check_env.py`）都在 `.gitignore` 里，`git ls-files` 不含它们。2026-10 全库复核：**已跟踪文件里没有真实密钥**（`_pet_balance_test.py` 的 `sk-test` 是测试桩；四个 autodl 脚本里的 `'REDACTED'` 是占位符）。
+- **别用 `git grep -E` 扫密钥**：POSIX ERE 不认 `\s`，正则静默失配会给出"没有泄漏"的假结论（本次踩过）。用 python 脚本扫，键名要带全（`pwd`/`pw` 这类缩写最容易漏）。

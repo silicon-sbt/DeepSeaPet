@@ -1,10 +1,12 @@
-"""对话持久化 — JSON 文件存储多会话"""
-import json
+"""对话持久化 — JSON 文件存储多会话
+
+写盘复用 config_manager 的原子写：聊天记录被覆盖写截断一次就全没了，
+而 load() 以前遇到坏 JSON 会直接 save() 覆盖——把用户的对话记录清得干干净净。
+"""
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
-from module_2_api.config_manager import CONFIG_DIR
+from module_2_api.config_manager import CONFIG_DIR, atomic_write_json, load_json
 
 STORE_FILE = CONFIG_DIR / "conversations.json"
 MAX_MESSAGES = 100  # 保留最近 100 条消息（50 轮对话）
@@ -51,13 +53,13 @@ class ConversationStore:
     # ── 持久化 ──────────────────────────
 
     def load(self):
-        try:
-            with open(STORE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+        data = load_json(STORE_FILE)
+        if not isinstance(data, dict):
             self._conversations = {}
             self._current_id = None
-            self.save()
+            # 文件不存在 → 落一份空档；文件损坏 → 已备份为 .corrupt，绝不再覆盖回去
+            if not STORE_FILE.exists():
+                self.save()
             return
         self._current_id = data.get("current_id")
         self._conversations = {}
@@ -70,8 +72,7 @@ class ConversationStore:
             "current_id": self._current_id,
             "conversations": [c.to_dict() for c in self._conversations.values()],
         }
-        with open(STORE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(STORE_FILE, data)
 
     # ── CRUD ─────────────────────────────
 

@@ -1,13 +1,15 @@
 """API 通信层 — 统一 LLM 调用接口（DeepSeek / 自定义 OpenAI 兼容）"""
+import json
+import urllib.error
+import urllib.request
 from typing import Generator
 
-from openai import OpenAI
 from openai import (
     APIError, APIConnectionError, AuthenticationError,
-    RateLimitError, APITimeoutError,
+    RateLimitError, APITimeoutError, OpenAI,
 )
 
-from module_2_api.config_manager import ConfigManager
+from module_2_api.config_manager import ConfigManager, DEFAULT_MODEL
 
 
 # ── 异常体系 ──────────────────────────────
@@ -28,6 +30,23 @@ class ApiNetworkError(Exception):
     """网络不通 / 超时"""
 
 
+# ── 客户端缓存 ────────────────────────────
+
+# 实测 openai.OpenAI() 构造一次要 1.3~1.8 秒（httpx 客户端 + SSL 上下文，
+# Windows 上尤其贵），而余额气泡每 60 秒就要查一次。按（key, base_url）缓存复用，
+# 换 key 或换地址会自然落到新条目上。
+_CLIENT_CACHE: dict[tuple, OpenAI] = {}
+
+
+def _openai_for(api_key: str, base_url) -> OpenAI:
+    cache_key = (api_key, base_url or "")
+    client = _CLIENT_CACHE.get(cache_key)
+    if client is None:
+        client = OpenAI(api_key=api_key, base_url=base_url or None)
+        _CLIENT_CACHE[cache_key] = client
+    return client
+
+
 # ── 客户端 ────────────────────────────────
 
 class ApiClient:
@@ -45,10 +64,7 @@ class ApiClient:
         base = self._config.api_base
         if self._config.api_type == "deepseek" and not base:
             base = "https://api.deepseek.com"
-        self._client = OpenAI(
-            api_key=self._config.api_key,
-            base_url=base or None,
-        )
+        self._client = _openai_for(self._config.api_key, base)
 
     @property
     def is_configured(self) -> bool:
@@ -59,7 +75,7 @@ class ApiClient:
         return self._config.api_type
 
     def _get_model(self, model=None) -> str:
-        return model or self._config.api_model or "deepseek-v4-flash"
+        return model or self._config.api_model or DEFAULT_MODEL
 
     # ── 流式对话（主要接口）────────────────
 
@@ -84,21 +100,17 @@ class ApiClient:
             raise ApiAuthError("API Key 无效，请检查后重试")
         except RateLimitError:
             raise ApiRateLimitError("请求太频繁，请稍后重试")
-        except APIConnectionError:
-            raise ApiNetworkError("无法连接 API，请检查网络或 API 地址")
+        # 注意顺序：APITimeoutError 是 APIConnectionError 的子类，
+        # 超时分支必须写在前面，否则永远命中不了（超时会被报成"无法连接"）。
         except APITimeoutError:
             raise ApiNetworkError("API 响应超时")
+        except APIConnectionError:
+            raise ApiNetworkError("无法连接 API，请检查网络或 API 地址")
         except APIError as e:
             # 402 余额不足
-            if hasattr(e, "status_code") and e.status_code == 402:
+            if getattr(e, "status_code", None) == 402:
                 raise ApiQuotaError("余额不足，请充值后重试")
             raise ApiNetworkError(f"API 错误: {e}")
-
-    # ── 非流式对话（备用）─────────────────
-
-    def chat_sync(self, messages: list[dict], model: str = None) -> str:
-        """一次性返回完整回复"""
-        return "".join(self.chat_stream(messages, model))
 
     # ── 余额查询（仅 DeepSeek）────────────
 
@@ -112,8 +124,6 @@ class ApiClient:
             raise ApiConfigError("API 未配置，请先设置 API Key")
         if self.api_type != "deepseek":
             return None
-        import json
-        import urllib.request
         base = (self._config.api_base or "https://api.deepseek.com").rstrip("/")
         req = urllib.request.Request(
             base + "/user/balance",
@@ -133,21 +143,3 @@ class ApiClient:
             return None
         first = infos[0]
         return float(first.get("total_balance", 0.0)), first.get("currency", "CNY")
-
-    # ── 连通性测试 ─────────────────────────
-
-    def ping(self) -> bool:
-        """测试 API 连通性"""
-        if not self._client:
-            raise ApiConfigError("API 未配置")
-        try:
-            self._client.chat.completions.create(
-                model=self._get_model(),
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=1,
-            )
-            return True
-        except AuthenticationError:
-            raise ApiAuthError("API Key 无效")
-        except Exception:
-            return False

@@ -1,22 +1,31 @@
-"""聊天窗口 — 深海主题卡片式 UI：磨砂渐变卡片 + header(头像/状态/关闭) + 尾巴气泡 + 胶囊输入区"""
+"""聊天窗口 — 深海主题卡片式 UI：header + 尾巴气泡消息区 + 胶囊输入区
+
+主题常量与绘制工具在 theme.py，三种自定义控件在 widgets.py；
+这里只留窗口本身（布局、拖拽/resize、流式收发、会话切换）。
+"""
 import threading
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
-    QTextEdit, QPushButton, QLabel, QGraphicsDropShadowEffect,
-    QGraphicsOpacityEffect, QMessageBox,
+    QPushButton, QLabel, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QMessageBox,
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QRectF, QPointF, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import (
-    QColor, QPainter, QMouseEvent, QPen, QBrush, QLinearGradient,
-    QPainterPath, QPixmap, QPolygonF,
-)
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QRectF
+from PySide6.QtGui import QColor, QPainter, QMouseEvent, QLinearGradient, QBrush, QPen
 
 from module_2_api.config_manager import ConfigManager
-from module_2_api.api_client import ApiClient, ApiConfigError, ApiAuthError, ApiQuotaError, ApiRateLimitError, ApiNetworkError
+from module_2_api.api_client import (
+    ApiClient, ApiConfigError, ApiAuthError, ApiQuotaError, ApiRateLimitError, ApiNetworkError,
+)
 from module_3_chat.conversation_store import ConversationStore
 from module_3_chat.greeting import get_random_greeting
-from module_1_core.animation import PetState, make_placeholder_sprite
+# 主题与控件显式再导出：外部（含测试）仍可从本模块 import 这些名字
+from module_3_chat.theme import (  # noqa: F401
+    WIN_W, WIN_H, MIN_W, MIN_H, EDGE, RADIUS, HEADER_H, AVATAR_S, MSG_AVATAR, TAIL_W, BUBBLE_R,
+    CARD_TOP, CARD_BOTTOM, CARD_BORDER, AI_BUBBLE_A, AI_BUBBLE_B, AI_BORDER,
+    USER_BUBBLE_A, USER_BUBBLE_B, TEXT_DARK, TEXT_WHITE, TEXT_SUB, ACCENT, ONLINE_GREEN,
+    _face_crop, _cached_pet_pix, _ai_avatar, _user_avatar,
+)
+from module_3_chat.widgets import ChatBubble, TypingBubble, InputBar  # noqa: F401
 
 SYSTEM_PROMPT = """你是一只深海鲸鱼娘桌宠，形象是蓝色长发+鲸鱼尾巴+女仆装的可爱女孩。
 性格：傲娇、嘴硬心软、偶尔撒娇。你是 DeepSeek 的娘化形象，被网友叫做"大肥鱼"但你很讨厌这个称呼。
@@ -29,274 +38,6 @@ SYSTEM_PROMPT = """你是一只深海鲸鱼娘桌宠，形象是蓝色长发+鲸
 - 被夸的时候会害羞，被说"大肥鱼"会生气
 - 认真回答问题的时候会收起傲娇，专业回答
 - 禁止说自己是AI助手/语言模型，你就是深海鲸鱼娘！"""
-
-# ── 主题（深海蓝）──────────────────
-CARD_TOP      = "#F9FBFF"   # 卡片渐变顶
-CARD_BOTTOM   = "#EDF3FC"   # 卡片渐变底
-CARD_BORDER   = QColor(74, 158, 255, 70)
-AI_BUBBLE_A   = "#FFFFFF"   # AI 气泡渐变
-AI_BUBBLE_B   = "#EAF3FF"
-AI_BORDER     = QColor(74, 158, 255, 40)
-USER_BUBBLE_A = "#5FB4FF"   # 用户气泡渐变
-USER_BUBBLE_B = "#3D8BF0"
-TEXT_DARK     = "#2C3E50"
-TEXT_WHITE    = "#FFFFFF"
-TEXT_SUB      = "#8A94A6"
-ACCENT        = "#4A9EFF"
-ONLINE_GREEN  = "#34D399"
-
-WIN_W   = 520
-WIN_H   = 450
-MIN_W   = 400
-MIN_H   = 360
-EDGE    = 8           # 边缘 resize 检测宽度
-RADIUS  = 18          # 卡片圆角
-HEADER_H = 52
-AVATAR_S = 34         # header 头像
-MSG_AVATAR = 32       # 气泡行头像
-TAIL_W  = 9           # 气泡尾巴长度
-BUBBLE_R = 14         # 气泡圆角
-
-# ── 工具 ───────────────────────────
-
-def _rounded_path(rect: QRectF, tl, tr, br, bl) -> QPainterPath:
-    """四角独立圆角路径"""
-    p = QPainterPath()
-    x, y, w, h = rect.x(), rect.y(), rect.width(), rect.height()
-    d = 2 * 0.5522847498  # 圆角逼近系数
-    p.moveTo(x + tl, y)
-    p.lineTo(x + w - tr, y)
-    p.cubicTo(x + w - tr + tr * d, y, x + w, y + tr - tr * d, x + w, y + tr)
-    p.lineTo(x + w, y + h - br)
-    p.cubicTo(x + w, y + h - br + br * d, x + w - br + br * d, y + h, x + w - br, y + h)
-    p.lineTo(x + bl, y + h)
-    p.cubicTo(x + bl - bl * d, y + h, x, y + h - bl + bl * d, x, y + h - bl)
-    p.lineTo(x, y + tl)
-    p.cubicTo(x, y + tl - tl * d, x + tl - tl * d, y, x + tl, y)
-    p.closeSubpath()
-    return p
-
-
-def _circle_pix(src: QPixmap, size: int) -> QPixmap:
-    """任意图 → 圆形裁剪头像（覆盖缩放居中）"""
-    out = QPixmap(size, size)
-    out.fill(Qt.transparent)
-    p = QPainter(out)
-    p.setRenderHint(QPainter.Antialiasing)
-    path = QPainterPath()
-    path.addEllipse(0, 0, size, size)
-    p.setClipPath(path)
-    scaled = src.scaled(size, size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-    p.drawPixmap((size - scaled.width()) // 2, (size - scaled.height()) // 2, scaled)
-    p.end()
-    return out
-
-
-def _face_crop(src: QPixmap, size: int) -> QPixmap:
-    """全身精灵图 → 头部聚焦头像：取画面顶部 30% 高度（头+肩）居中裁剪再圆形化。
-
-    全身图几何居中裁剪只会裁到躯干/裙子（角色头顶在 y≈15，画面中心在身体），
-    头像必须聚焦头部区域。
-    """
-    w, h = src.width(), src.height()
-    hw = int(w * 0.60)
-    hx = (w - hw) // 2
-    hy = int(h * 0.02)  # 避开顶部透明边缘
-    hh = int(h * 0.30)
-    return _circle_pix(src.copy(hx, hy, hw, hh), size)
-
-
-_ai_avatar_cache = None
-_user_avatar_cache = None
-
-
-def _ai_avatar():
-    """鲸鱼娘圆形头像（用趴姿帧）"""
-    global _ai_avatar_cache
-    if _ai_avatar_cache is None:
-        from module_1_core.animation import SPRITE_DIR
-        idle = SPRITE_DIR / "idle_00.png"
-        if idle.exists():
-            _ai_avatar_cache = _face_crop(QPixmap(str(idle)), MSG_AVATAR)
-        else:
-            _ai_avatar_cache = _circle_pix(make_placeholder_sprite(PetState.IDLE, size=64), MSG_AVATAR)
-    return _ai_avatar_cache
-
-
-def _user_avatar():
-    """用户头像：蓝渐变圆 + 白字"""
-    global _user_avatar_cache
-    if _user_avatar_cache is None:
-        s = MSG_AVATAR
-        out = QPixmap(s, s)
-        out.fill(Qt.transparent)
-        p = QPainter(out)
-        p.setRenderHint(QPainter.Antialiasing)
-        grad = QLinearGradient(0, 0, 0, s)
-        grad.setColorAt(0, QColor(USER_BUBBLE_A))
-        grad.setColorAt(1, QColor(USER_BUBBLE_B))
-        p.setBrush(QBrush(grad))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(0, 0, s, s)
-        p.setPen(QColor(TEXT_WHITE))
-        f = p.font()
-        f.setPointSizeF(9.5)
-        f.setBold(True)
-        p.setFont(f)
-        p.drawText(QRectF(0, 0, s, s), Qt.AlignCenter, "我")
-        p.end()
-        _user_avatar_cache = out
-    return _user_avatar_cache
-
-
-def _cached_pet_pix():
-    """header 大头像（待机图）"""
-    from module_1_core.animation import SPRITE_DIR
-    idle_path = SPRITE_DIR / "idle_00.png"
-    if idle_path.exists():
-        return QPixmap(str(idle_path))
-    return make_placeholder_sprite(PetState.IDLE, size=64)
-
-
-# ── 气泡 ───────────────────────────
-
-class TypingBubble(QWidget):
-    """打字指示器气泡：三个弹跳圆点（等待 AI 回复时显示）"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._t = 0
-        self.setFixedSize(64, 34)
-        self._timer = QTimer(self)
-        self._timer.setInterval(90)
-        self._timer.timeout.connect(lambda: (setattr(self, "_t", self._t + 1), self.update()))
-        self._timer.start()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        grad = QLinearGradient(0, 0, 0, self.height())
-        grad.setColorAt(0, QColor(AI_BUBBLE_A))
-        grad.setColorAt(1, QColor(AI_BUBBLE_B))
-        p.setBrush(QBrush(grad))
-        p.setPen(QPen(AI_BORDER, 1))
-        path = _rounded_path(QRectF(TAIL_W, 0, self.width() - TAIL_W, self.height()), 6, BUBBLE_R, BUBBLE_R, BUBBLE_R)
-        p.drawPath(path)
-        p.drawPolygon(QPolygonF([QPointF(TAIL_W, 11), QPointF(0, 17), QPointF(TAIL_W, 23)]))
-        # 三个弹跳圆点：相位差 0.6s
-        for i in range(3):
-            ph = (self._t + i * 6) % 18
-            r = 3.5 + (1.5 if ph < 6 else 0)
-            y = 17 + (4 - ph * 0.45 if ph < 9 else ph * 0.45 - 4) * 0.5
-            p.setBrush(QBrush(QColor(ACCENT)))
-            p.setPen(Qt.NoPen)
-            p.drawEllipse(QPointF(14 + i * 13, y), r, r)
-
-    def setText(self, text):
-        pass  # 占位兼容：流式到达时由 ChatWindow 替换为普通气泡
-
-
-class ChatBubble(QWidget):
-    """尾巴气泡：渐变圆角矩形 + 三角尾巴，内部 QLabel 承载富文本"""
-
-    def __init__(self, text="", is_user=False, parent=None):
-        super().__init__(parent)
-        self.is_user = is_user
-        self._label = QLabel(text, self)
-        self._label.setWordWrap(True)
-        self._label.setTextFormat(Qt.RichText)
-        self._label.setStyleSheet(
-            f"background: transparent; color: {TEXT_WHITE if is_user else TEXT_DARK}; font-size: 13px;")
-        self._label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        lay = QVBoxLayout(self)
-        if is_user:
-            lay.setContentsMargins(14, 9, TAIL_W + 12, 9)
-        else:
-            lay.setContentsMargins(TAIL_W + 12, 9, 14, 9)
-        lay.addWidget(self._label)
-        self.setMaximumWidth(350)
-
-    def setText(self, text):
-        self._label.setText(text)
-
-    def text(self):
-        return self._label.text()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        if self.is_user:
-            rect = QRectF(0, 0, w - TAIL_W, h)
-            path = _rounded_path(rect, BUBBLE_R, BUBBLE_R, 6, BUBBLE_R)
-            grad = QLinearGradient(0, 0, 0, h)
-            grad.setColorAt(0, QColor(USER_BUBBLE_A))
-            grad.setColorAt(1, QColor(USER_BUBBLE_B))
-            tail = [(w - TAIL_W, 16), (w, 22), (w - TAIL_W, 28)]
-        else:
-            rect = QRectF(TAIL_W, 0, w - TAIL_W, h)
-            path = _rounded_path(rect, 6, BUBBLE_R, BUBBLE_R, BUBBLE_R)
-            grad = QLinearGradient(0, 0, 0, h)
-            grad.setColorAt(0, QColor(AI_BUBBLE_A))
-            grad.setColorAt(1, QColor(AI_BUBBLE_B))
-            tail = [(TAIL_W, 16), (0, 22), (TAIL_W, 28)]
-        p.setPen(QPen(AI_BORDER if not self.is_user else QColor(255, 255, 255, 130), 1))
-        p.setBrush(QBrush(grad))
-        p.drawPath(path)
-        p.drawPolygon(QPolygonF([QPointF(x, y) for x, y in tail]))
-
-
-# ── 输入条 ─────────────────────────
-
-class InputBar(QWidget):
-    """胶囊输入区：圆角白底输入框 + 圆形渐变发送钮"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(70)
-        self._init_ui()
-
-    def _init_ui(self):
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(16, 12, 16, 14)
-        lay.setSpacing(10)
-
-        self.input_edit = QTextEdit()
-        self.input_edit.setPlaceholderText("跟鲸鱼娘说点什么…")
-        self.input_edit.setMaximumHeight(40)
-        self.input_edit.setMinimumHeight(36)
-        self.input_edit.setStyleSheet(f"""
-            QTextEdit {{
-                background: #F4F8FE; color: {TEXT_DARK};
-                border: 1.5px solid #C9D8EA; border-radius: 19px;
-                padding: 6px 16px; font-size: 13px;
-                placeholder-text-color: #AEB9C9;
-            }}
-            QTextEdit:hover {{ border-color: #B4CBE6; }}
-            QTextEdit:focus {{ border-color: {ACCENT}; background: #FFFFFF; }}
-        """)
-        lay.addWidget(self.input_edit)
-
-        self.send_btn = QPushButton("↑")
-        self.send_btn.setFixedSize(40, 40)
-        self.send_btn.setCursor(Qt.PointingHandCursor)
-        self.send_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 {USER_BUBBLE_A}, stop:1 {USER_BUBBLE_B});
-                color: white; border: none; border-radius: 20px;
-                font-size: 18px; font-weight: bold;
-            }}
-            QPushButton:hover {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #6FC0FF, stop:1 {ACCENT}); }}
-            QPushButton:pressed {{ background: #3D8BF0; }}
-            QPushButton:disabled {{ background: #B9CDE8; }}
-        """)
-        lay.addWidget(self.send_btn)
-
-    def set_send_handler(self, handler):
-        self.send_btn.clicked.connect(handler)
-
 
 # ── 主窗口 ─────────────────────────
 
@@ -324,7 +65,9 @@ class ChatWindow(QWidget):
 
     def _init_ui(self):
         self.setWindowTitle("深海鲸鱼娘")
-        self.resize(WIN_W, WIN_H)
+        # 恢复上次调整过的窗口尺寸（钳到最小尺寸以上）
+        self.resize(max(MIN_W, int(self.config.chat_w)),
+                    max(MIN_H, int(self.config.chat_h)))
         self.setMinimumSize(MIN_W, MIN_H)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -368,6 +111,21 @@ class ChatWindow(QWidget):
         name_box.addWidget(sub)
         h_lay.addLayout(name_box)
         h_lay.addStretch(1)
+
+        self._new_btn = QPushButton("＋")
+        self._new_btn.setToolTip("开一段新对话")
+        self._new_btn.setFixedSize(32, 32)
+        self._new_btn.setCursor(Qt.PointingHandCursor)
+        self._new_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 235); color: #4A9EFF;
+                border: 1px solid rgba(74,158,255,60); border-radius: 16px; font-size: 16px;
+            }
+            QPushButton:hover { background: #EAF3FF; border-color: #4A9EFF; }
+            QPushButton:pressed { background: #D6E9FF; }
+        """)
+        self._new_btn.clicked.connect(self._new_conversation)
+        h_lay.addWidget(self._new_btn)
 
         self._close_btn = QPushButton("✕")
         self._close_btn.setFixedSize(32, 32)
@@ -513,7 +271,7 @@ class ChatWindow(QWidget):
             self.store.current_id = conv.id
             self._load_messages(conv.id)
         else:
-            self._add_bubble("嘿～我是深海鲸鱼娘！<br>想聊什么呀？", False)
+            self._add_bubble("嘿～我是深海鲸鱼娘！\n想聊什么呀？", False)
 
     def _load_messages(self, conv_id: str):
         conv = self.store.get(conv_id)
@@ -601,12 +359,14 @@ class ChatWindow(QWidget):
         """把打字指示器行替换成普通 AI 气泡（流式开始或出错时）"""
         if not getattr(self, "_typing_row", None) or self._typing_row.layout() is None:
             return
-        bubble = ChatBubble(text, False)
-        idx = self._typing_lay.indexOf(self._ai_bubble)
+        old = self._ai_bubble
+        idx = self._typing_lay.indexOf(old) if old is not None else -1
         if idx >= 0:
-            self._typing_lay.takeAt(idx)
-        self._ai_bubble.deleteLater()
+            self._typing_lay.takeAt(idx)     # 先摘出布局，再删，避免留下悬空项
+        bubble = ChatBubble(text, False)
         self._typing_lay.insertWidget(idx if idx >= 0 else 1, bubble)
+        if old is not None:
+            old.deleteLater()
         self._ai_bubble = bubble
         self._typing_row = None
 
@@ -667,8 +427,9 @@ class ChatWindow(QWidget):
         if isinstance(self._ai_bubble, TypingBubble):
             self._replace_typing()
         if self._ai_bubble:
-            t = token.replace("\n", "<br>")
-            self._ai_bubble.setText(self._ai_bubble.text() + t)
+            # worker 线程已把 token 累进 _stream_buffer，直接用它重设文本：
+            # ChatBubble 内部负责转义，从 QLabel 读回再拼等于每 token 重建一次富文本
+            self._ai_bubble.setText(self._stream_buffer)
         QTimer.singleShot(80, self._scroll_bottom)
 
     def _on_stream_error(self, msg: str):
@@ -685,6 +446,22 @@ class ChatWindow(QWidget):
             self.store.add_message(self.store.current_id, "assistant", self._stream_buffer)
             self._stream_buffer = ""
         self.input_bar.input_edit.setFocus()
+
+    # ── 会话切换 / 尺寸持久化 ──────────────
+
+    def _new_conversation(self):
+        """开新对话：新建会话 + 清空消息区 + 重新打个招呼"""
+        if self._streaming:
+            return
+        self.store.create()
+        self._clear_messages()
+        self._add_bubble(get_random_greeting(self.config.api_type or "deepseek"), False)
+
+    def hideEvent(self, event):
+        # 只在隐藏时落盘一次：写在 resizeEvent 里会变成每像素一次 JSON 写
+        self.config.chat_w = self.width()
+        self.config.chat_h = self.height()
+        super().hideEvent(event)
 
     # ── 事件过滤（app 级）：全区域拖拽 / 边缘 resize / 光标反馈 / 快捷键 ──
 
@@ -723,13 +500,3 @@ class ChatWindow(QWidget):
                 self._send()
                 return True
         return super().eventFilter(obj, event)
-
-    # ── 打招呼 ────────────────────────────
-
-    def show_greeting(self):
-        if not self.client.is_configured:
-            return
-        msg = get_random_greeting(self.config.api_type)
-        self._add_bubble(msg, False)
-        if self.store.current_id:
-            self.store.add_message(self.store.current_id, "assistant", msg)

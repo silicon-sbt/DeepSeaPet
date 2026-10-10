@@ -1,9 +1,11 @@
-"""多线程断点续传 — 4 路并行上传剩余数据块，最后合并"""
-import paramiko, os, sys, time, threading
+"""多线程断点续传 — 4 路并行上传剩余数据块，最后合并（连接信息走 conn.py）"""
+import os
+import sys
+import threading
+import time
 
-host = 'connect.westd.seetacloud.com'
-port = 11721
-pwd = 'REDACTED'
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from conn import connect
 
 LOCAL = r"E:\code\deepseek的桌宠\animagine_model\models\ModelE--Animagine-XL\snapshots\master\animagineXL40_v40.safetensors"
 REMOTE = "/root/autodl-tmp/models/animagineXL40_v40.safetensors"
@@ -13,9 +15,7 @@ CHUNK = 4 * 1024 * 1024  # 4MB per read
 total = os.path.getsize(LOCAL)
 
 # === 检查远程已有大小 ===
-c0 = paramiko.SSHClient()
-c0.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-c0.connect(host, port=port, username='root', password=pwd, timeout=30)
+c0 = connect(timeout=30)
 s0 = c0.open_sftp()
 try:
     remote_size = s0.stat(REMOTE).st_size
@@ -47,12 +47,9 @@ t0 = time.time()
 errors = []
 
 def upload_chunk(tid: int, start: int, end: int):
-    global errors
     tmp = f"{REMOTE}.part{tid}"
     try:
-        c = paramiko.SSHClient()
-        c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        c.connect(host, port=port, username='root', password=pwd, timeout=30)
+        c = connect(timeout=30)
         sftp = c.open_sftp()
 
         # 上传分块到临时文件
@@ -115,9 +112,7 @@ if errors:
 
 # === 合并分块到主文件 ===
 print("\n合并分块...", flush=True)
-c2 = paramiko.SSHClient()
-c2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-c2.connect(host, port=port, username='root', password=pwd, timeout=30)
+c2 = connect(timeout=30)
 # 逐个追加分块
 for i in range(THREADS):
     tmp = f"{REMOTE}.part{i}"

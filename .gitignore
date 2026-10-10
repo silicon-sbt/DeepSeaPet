@@ -5,7 +5,9 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# spec 一般是 PyInstaller 生成的临时文件；但 DeepSeaPet.spec 是唯一的打包配置，必须入库
 *.spec
+!DeepSeaPet.spec
 
 # 模型文件 (太大)
 animagine_model/
@@ -73,6 +75,10 @@ module_5_assets/sprites_backup/
 # 3D webpet 实验 / DSH 工具锁
 _rollback_3d/
 skills-lock.json
+.local/
+
+# CodeGraph 本地索引（随时可重建，勿入库）
+.codegraph/
 
 # 即梦生成素材 (大文件, 不入库)
 _walk_gen/
