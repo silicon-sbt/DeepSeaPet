@@ -10,10 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|------|
 | `sprites_video_dl/{state}/{state}_00..07.png` | AutoDL 下载的原始生成帧（8 帧/状态，每张是 **2×2 四格拼图**，每格 512） |
 | `base_refs/{state}_00.png` | 豆包基准图（7 状态）；只有 idle 是白底单角色 |
-| `sprites_new/` | `_eat_shit.py` 输出：切最佳格 + 色度键抠图 → 512×512 透明帧（7 状态 × 8 帧 = 56 帧） |
+| `sprites_new/` | `_eat_shit.py` 输出：切最佳格 + 色度键抠图 → 512×512 透明帧（7 状态 × 8 帧 = 56 帧）。**2026-10 已移出仓库**到 `E:\code\deepseek的桌宠-离线素材\生成素材\sprites_new`（重跑 `_eat_shit.py` 会在本目录重新生成） |
 | `../module_5_assets/sprites/` | 桌宠实际加载的帧（已用 `sprites_new/` 覆盖） |
-| `../module_5_assets/sprites_backup/` | 原四格拼图备份（要回滚就拷这里） |
-| `_ref_lightx2v/` | LightX2V 官方仓库的 git clone（参考源码 + docs/skills），**不是本项目代码，别在里面改东西** |
+| `../module_5_assets/sprites_backup/` | 原四格拼图备份（要回滚就拷这里）。**2026-10 已移出仓库**到 `E:\code\deepseek的桌宠-离线素材\精灵图备份\sprites_backup` |
+| `_ref_lightx2v/` | LightX2V 官方仓库的 git clone（参考源码 + docs/skills），**不是本项目代码，别在里面改东西**。**2026-10 已移出仓库**到 `E:\code\deepseek的桌宠-离线素材\第三方参考源码\_ref_lightx2v`，要看参考源码去那里 |
+| `archive/` | **2026-10 归档的死脚本**：已放弃路径（LightX2V/Wan2.1 蒸馏那套）与一次性诊断脚本共 16 个。在仓库内、git 里可查，别当现役工具用 |
 
 ## 核心病根：四格拼图（本会话血泪结论）
 

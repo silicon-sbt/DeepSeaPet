@@ -9,7 +9,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from conn import connect
 
-LOCAL = r"E:\code\deepseek的桌宠\animagine_model\models\ModelE--Animagine-XL\snapshots\master\animagineXL40_v40.safetensors"
+LOCAL = r"E:\code\deepseek的桌宠-离线素材\模型\animagine_model\models\ModelE--Animagine-XL\snapshots\master\animagineXL40_v40.safetensors"  # 模型已移出仓库（见根目录 CLAUDE.md「离线素材归档」）
 REMOTE = "/root/autodl-tmp/models/animagineXL40_v40.safetensors"
 CHUNK = 8 * 1024 * 1024  # 8MB
 

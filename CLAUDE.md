@@ -71,6 +71,29 @@ pyinstaller --onefile --windowed --name DeepSeaPet --add-data "module_5_assets;m
 
 `AutoStartManager` → Windows 注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，指向当前 Python 解释器 + main.py 路径（打包后指向 exe 自身）。**勾选状态一律回读注册表**（`is_enabled()`）：写注册表失败会弹警告，绝不假装成功——以前吞掉 `OSError` 还弹「已开启」，用户要等到下次开机才发现没生效。
 
+## 离线素材归档（2026-10 清理）
+
+仓库根目录一度堆到 **19GB**，绝大部分与源码无关。2026-10 把**不在版本控制内、且没有任何存活脚本引用**的大件移到了同盘兄弟目录 —— 同盘 rename 是秒级的，字节一个不少。
+
+**归档位置：`E:\code\deepseek的桌宠-离线素材\`**
+
+| 归档内容 | 原来在哪 |
+|---|---|
+| `模型\animagine_model\`（6.6GB SDXL 快照） | 仓库根 `animagine_model/`（`multi_upload.py` / `resume_upload.py` 的 LOCAL 已改指这里） |
+| `模型\models\u2net.onnx`（167MB rembg 抠图模型） | 仓库根 `models/` |
+| `精灵图备份\sprites_backup\`（68MB） | `module_5_assets/sprites_backup/` |
+| `第三方参考源码\_ref_lightx2v\`（22.7MB LightX2V clone） | `autodl_tools/_ref_lightx2v/` |
+| `生成素材\sprites_new`、`_compare`、`_walk_dl_v1`、`_walk_dl_v2` | 同名目录 |
+| `废弃实验\_rollback_3d\`（已放弃的 3D 桌宠实验） | 仓库根 `_rollback_3d/` |
+
+**没动的**：`ollama_models/`（12.2GB）—— `OLLAMA_MODELS` 就指向这里、ollama 常驻内存，`_vlm_look.py` 靠它做无视觉自审。**删了本地看图能力就废了**，它虽然占地方但不是垃圾。
+
+**一度搬出去又搬回来的**：`_walk_gen/`、`autodl_tools/sprites_video_dl/`、`autodl_tools/_frames_local/`、`autodl_tools/base_refs/` —— 它们是活跃/在册脚本`ROOT / "xxx"` 写死的默认工作目录（`imeng_walk.py`、`_eat_shit.py`、`_rembg_frames.py` 等），搬走等于断链。**判定规则：目录被任何存活 .py 引用就留，只搬没人引用的**。
+
+**脚本归档**：16 个属于已放弃路径与一次性诊断的脚本进了 `autodl_tools/archive/`（仍在仓库内、git 可查）。**含 walk / jimeng / seedream / rembg / anchor 的一律没碰** —— 那是当前活跃管线。
+
+**直接删除的（可再生）**：`build/` + `dist/`（PyInstaller 产物，426MB）、各 `__pycache__/`、`_compare2/`。要 exe 就 `pyinstaller DeepSeaPet.spec` 重新打包。
+
 ## AutoDL 精灵图生成
 
 ### 硬约束
